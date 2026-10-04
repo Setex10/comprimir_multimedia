@@ -1,7 +1,38 @@
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 
-const FFMPEG_PATH = process.env.FFMPEG_PATH || require('ffmpeg-static') || 'ffmpeg';
+const FFMPEG_HELP =
+  'No se encontró FFmpeg. Soluciones: 1) ejecuta "npm rebuild ffmpeg-static" en la carpeta ' +
+  'del proyecto y reinicia; 2) o instala FFmpeg en el sistema (Windows: "winget install Gyan.FFmpeg", ' +
+  'Mac: "brew install ffmpeg") y reinicia la terminal; 3) o indica la ruta con la variable FFMPEG_PATH.';
+
+function works(bin) {
+  try {
+    return spawnSync(bin, ['-version'], { stdio: 'ignore', timeout: 10000 }).status === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Busca FFmpeg en este orden: variable FFMPEG_PATH, el binario de ffmpeg-static
+ * (se descarga en "npm install" y a veces falla en Windows) y el FFmpeg del sistema.
+ */
+function resolveFfmpeg() {
+  const candidates = [];
+  if (process.env.FFMPEG_PATH) candidates.push(process.env.FFMPEG_PATH);
+  try {
+    const bundled = require('ffmpeg-static');
+    if (bundled && fs.existsSync(bundled)) candidates.push(bundled);
+  } catch {
+    // ffmpeg-static no instalado: seguimos con el del sistema.
+  }
+  candidates.push('ffmpeg');
+  return candidates.find(works) || null;
+}
+
+const FFMPEG_PATH = resolveFfmpeg();
 
 // CRF de x264: menor = más calidad. 18 es prácticamente indistinguible del original.
 const CRF = {
@@ -74,6 +105,7 @@ function parseDuration(stderr) {
  * @param {(percent:number)=>void} onProgress
  */
 function compressVideo(inputPath, outputDir, baseName, options = {}, onProgress = () => {}) {
+  if (!FFMPEG_PATH) return Promise.reject(new Error(FFMPEG_HELP));
   const outputPath = path.join(outputDir, `${baseName}.mp4`);
   const args = buildArgs(inputPath, outputPath, options);
 
@@ -100,7 +132,7 @@ function compressVideo(inputPath, outputDir, baseName, options = {}, onProgress 
       }
     });
 
-    proc.on('error', (err) => reject(new Error(`No se pudo ejecutar FFmpeg: ${err.message}`)));
+    proc.on('error', () => reject(new Error(FFMPEG_HELP)));
     proc.on('close', (code) => {
       if (code === 0) {
         onProgress(100);
@@ -113,4 +145,4 @@ function compressVideo(inputPath, outputDir, baseName, options = {}, onProgress 
   });
 }
 
-module.exports = { compressVideo, buildArgs, scaleFilter, CRF, FFMPEG_PATH };
+module.exports = { compressVideo, buildArgs, scaleFilter, CRF, FFMPEG_PATH, FFMPEG_HELP };

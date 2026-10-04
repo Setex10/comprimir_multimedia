@@ -89,6 +89,22 @@ docker run -p 3000:3000 compresor-multimedia
 - **Videos de producto**: 1080p y calidad *Alta* suele ser el mejor equilibrio. Shopify admite
   videos de hasta 1 GB y 10 minutos.
 
+## Solución de problemas
+
+**Error con FFmpeg al comprimir videos (`ffmpeg.exe ENOENT` / "No se encontró FFmpeg")**
+
+El paquete `ffmpeg-static` descarga FFmpeg durante `npm install`, y en Windows esa descarga
+a veces falla (antivirus, red o proxy). Al arrancar, la consola indica qué FFmpeg se está usando.
+Si no encuentra ninguno:
+
+1. Reintenta la descarga en la carpeta del proyecto: `npm rebuild ffmpeg-static`
+2. O instala FFmpeg en el sistema y abre una terminal nueva:
+   - Windows: `winget install Gyan.FFmpeg`
+   - Mac: `brew install ffmpeg`
+3. O indica la ruta manualmente: `set FFMPEG_PATH=C:\ruta\a\ffmpeg.exe` (Windows) antes de `npm start`.
+
+La app busca FFmpeg automáticamente en este orden: `FFMPEG_PATH` → `ffmpeg-static` → FFmpeg del sistema.
+
 ## Desarrollo
 
 ```bash

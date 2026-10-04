@@ -8,7 +8,7 @@ const crypto = require('crypto');
 const { ZipArchive } = require('archiver');
 
 const { compressImage, fileSize } = require('./image');
-const { compressVideo } = require('./video');
+const { compressVideo, FFMPEG_PATH, FFMPEG_HELP } = require('./video');
 
 const PORT = Number(process.env.PORT) || 3000;
 const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB) || 2048;
@@ -246,6 +246,8 @@ app.use((err, req, res, _next) => {
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`Compresor multimedia listo en http://localhost:${PORT}`);
+    if (FFMPEG_PATH) console.log(`FFmpeg: ${FFMPEG_PATH}`);
+    else console.warn(`\n⚠  Los videos no funcionarán. ${FFMPEG_HELP}\n`);
   });
 }
 
