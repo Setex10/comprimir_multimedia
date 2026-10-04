@@ -15,24 +15,58 @@ function works(bin) {
   }
 }
 
-/**
- * Busca FFmpeg en este orden: variable FFMPEG_PATH, el binario de ffmpeg-static
- * (se descarga en "npm install" y a veces falla en Windows) y el FFmpeg del sistema.
- */
-function resolveFfmpeg() {
-  const candidates = [];
-  if (process.env.FFMPEG_PATH) candidates.push(process.env.FFMPEG_PATH);
+function bundledPath() {
   try {
-    const bundled = require('ffmpeg-static');
-    if (bundled && fs.existsSync(bundled)) candidates.push(bundled);
+    return require('ffmpeg-static');
   } catch {
-    // ffmpeg-static no instalado: seguimos con el del sistema.
+    return null;
   }
-  candidates.push('ffmpeg');
-  return candidates.find(works) || null;
 }
 
-const FFMPEG_PATH = resolveFfmpeg();
+/**
+ * Descarga el binario de ffmpeg-static si falta. Normalmente lo hace "npm install",
+ * pero algunas versiones/configuraciones de npm no ejecutan los scripts de
+ * instalación de las dependencias y el archivo nunca llega a descargarse.
+ */
+function downloadBundled() {
+  let installer;
+  try {
+    installer = path.join(path.dirname(require.resolve('ffmpeg-static/package.json')), 'install.js');
+  } catch {
+    return Promise.resolve(false);
+  }
+  console.log('Descargando FFmpeg (solo la primera vez, puede tardar un minuto)…');
+  return new Promise((resolve) => {
+    const proc = spawn(process.execPath, [installer], {
+      cwd: path.dirname(installer),
+      stdio: ['ignore', 'inherit', 'inherit'],
+    });
+    proc.on('error', () => resolve(false));
+    proc.on('close', (code) => resolve(code === 0));
+  });
+}
+
+/**
+ * Busca FFmpeg en este orden: variable FFMPEG_PATH, el binario de ffmpeg-static
+ * (descargándolo si falta) y el FFmpeg instalado en el sistema.
+ */
+async function resolveFfmpeg() {
+  if (process.env.FFMPEG_PATH && works(process.env.FFMPEG_PATH)) return process.env.FFMPEG_PATH;
+
+  const bundled = bundledPath();
+  if (bundled && !fs.existsSync(bundled)) await downloadBundled();
+  if (bundled && fs.existsSync(bundled) && works(bundled)) return bundled;
+
+  if (works('ffmpeg')) return 'ffmpeg';
+  return null;
+}
+
+let ffmpegPromise = null;
+/** Devuelve la ruta de FFmpeg (o null). Se resuelve una sola vez. */
+function getFfmpeg() {
+  if (!ffmpegPromise) ffmpegPromise = resolveFfmpeg();
+  return ffmpegPromise;
+}
 
 // CRF de x264: menor = más calidad. 18 es prácticamente indistinguible del original.
 const CRF = {
@@ -104,13 +138,14 @@ function parseDuration(stderr) {
  * y todos los navegadores.
  * @param {(percent:number)=>void} onProgress
  */
-function compressVideo(inputPath, outputDir, baseName, options = {}, onProgress = () => {}) {
-  if (!FFMPEG_PATH) return Promise.reject(new Error(FFMPEG_HELP));
+async function compressVideo(inputPath, outputDir, baseName, options = {}, onProgress = () => {}) {
+  const ffmpeg = await getFfmpeg();
+  if (!ffmpeg) throw new Error(FFMPEG_HELP);
   const outputPath = path.join(outputDir, `${baseName}.mp4`);
   const args = buildArgs(inputPath, outputPath, options);
 
   return new Promise((resolve, reject) => {
-    const proc = spawn(FFMPEG_PATH, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn(ffmpeg, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     let stderr = '';
     let duration = null;
 
@@ -145,4 +180,4 @@ function compressVideo(inputPath, outputDir, baseName, options = {}, onProgress 
   });
 }
 
-module.exports = { compressVideo, buildArgs, scaleFilter, CRF, FFMPEG_PATH, FFMPEG_HELP };
+module.exports = { compressVideo, buildArgs, scaleFilter, CRF, getFfmpeg, FFMPEG_HELP };

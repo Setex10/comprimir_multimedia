@@ -7,13 +7,15 @@ const path = require('path');
 const sharp = require('sharp');
 
 const { app, slugify } = require('../src/server');
-const { FFMPEG_PATH } = require('../src/video');
+const { getFfmpeg } = require('../src/video');
+let FFMPEG_PATH;
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-test-'));
 let server;
 let base;
 
 test.before(async () => {
+  FFMPEG_PATH = await getFfmpeg();
   server = app.listen(0);
   await new Promise((r) => server.once('listening', r));
   base = `http://127.0.0.1:${server.address().port}`;

@@ -93,9 +93,10 @@ docker run -p 3000:3000 compresor-multimedia
 
 **Error con FFmpeg al comprimir videos (`ffmpeg.exe ENOENT` / "No se encontró FFmpeg")**
 
-El paquete `ffmpeg-static` descarga FFmpeg durante `npm install`, y en Windows esa descarga
-a veces falla (antivirus, red o proxy). Al arrancar, la consola indica qué FFmpeg se está usando.
-Si no encuentra ninguno:
+El paquete `ffmpeg-static` descarga FFmpeg durante `npm install`, pero algunas versiones de npm
+no ejecutan esa descarga, o la bloquea el antivirus, la red o un proxy. Si falta, la app intenta
+descargarlo sola al arrancar ("Descargando FFmpeg…") y luego indica en la consola qué FFmpeg usa.
+Si aun así no encuentra ninguno:
 
 1. Reintenta la descarga en la carpeta del proyecto: `npm rebuild ffmpeg-static`
 2. O instala FFmpeg en el sistema y abre una terminal nueva:
