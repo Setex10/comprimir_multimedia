@@ -1,0 +1,23 @@
+{
+  "name": "comprimir-multimedia",
+  "version": "1.0.0",
+  "description": "Aplicación web para comprimir imágenes y videos para Shopify manteniendo la máxima calidad posible",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "archiver": "^8.0.0",
+    "express": "^5.2.1",
+    "ffmpeg-static": "^5.3.0",
+    "multer": "^2.4.0",
+    "sharp": "^0.35.5"
+  }
+}
