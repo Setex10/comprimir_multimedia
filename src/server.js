@@ -157,9 +157,10 @@ async function runJob(job, options) {
       job.status = 'done';
     });
   } catch (err) {
-    console.error(`[${job.id}] Error:`, err.message);
+    console.error(`[${job.id}] Error procesando "${job.originalName}": ${err.message}`);
+    if (err.details) console.error(`[${job.id}] Últimas líneas de FFmpeg:\n${err.details}`);
     job.status = 'error';
-    job.error = err.message.split('\n')[0];
+    job.error = err.message;
   } finally {
     fsp.rm(job.inputPath, { force: true }).catch(() => {});
   }

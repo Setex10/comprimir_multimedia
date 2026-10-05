@@ -166,11 +166,12 @@ function buildArgs(inputPath, outputPath, options = {}, segments = null, pipe = 
 
   const args = ['-hide_banner', '-y'];
   let video = '0:v:0';
-  let audio = '0:a:0';
+  const audioStream = options.audioIndex != null ? String(options.audioIndex) : 'a:0';
+  let audio = `0:${audioStream}`;
   if (pipe) {
     args.push('-f', 'image2pipe', '-c:v', 'ppm', '-framerate', String(pipe.fps), '-i', 'pipe:0');
     video = '0:v:0';
-    audio = '1:a:0';
+    audio = `1:${audioStream}`;
   }
   args.push('-i', inputPath);
 
@@ -216,6 +217,22 @@ function buildArgs(inputPath, outputPath, options = {}, segments = null, pipe = 
 
   args.push('-progress', 'pipe:1', '-nostats', outputPath);
   return args;
+}
+
+/**
+ * Extrae del stderr de FFmpeg las líneas que explican el fallo (FFmpeg escribe
+ * mucha información; el motivo suele estar en las últimas líneas con "error").
+ */
+function ffmpegReason(stderr) {
+  const lines = stderr
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l && !/^(frame=|size=|progress=|\[out#)/.test(l));
+  const relevant = lines.filter((l) => /error|invalid|fail|cannot|unable|not supported|no such|denied|unknown|too large/i.test(l));
+  // El primer error suele ser la causa; el último, la consecuencia ("Conversion failed").
+  const source = relevant.length ? relevant : lines;
+  const picked = source.length > 3 ? [...source.slice(0, 2), source[source.length - 1]] : source;
+  return picked.join(' | ').slice(0, 600) || 'sin detalles';
 }
 
 function parseDuration(stderr) {
@@ -271,15 +288,31 @@ function runFfmpeg(ffmpeg, args, { expectedDuration = null, onProgress = () => {
     }
 
     proc.on('error', () => reject(new Error(FFMPEG_HELP)));
-    proc.on('close', (code) => {
-      if (feedError) reject(feedError);
-      else if (code === 0) resolve(stderr);
+    proc.on('close', (code, signal) => {
+      // Si FFmpeg se cerró por su cuenta, su propio mensaje explica el motivo;
+      // el error de "escritura en tubería cerrada" solo es una consecuencia.
+      if (feedError && !feedError.encoderClosed) reject(feedError);
+      else if (code === 0 && !feedError) resolve(stderr);
       else {
-        const tail = stderr.split('\n').slice(-8).join('\n');
-        reject(new Error(`FFmpeg terminó con código ${code}:\n${tail}`));
+        const err = new Error(
+          `FFmpeg falló (${code !== null ? `código ${code}` : `señal ${signal}`}): ${ffmpegReason(stderr)}`,
+        );
+        err.details = stderr.split(/\r?\n/).slice(-30).join('\n');
+        reject(err);
       }
     });
   });
+}
+
+/**
+ * Elige la primera pista de audio que FFmpeg puede decodificar. Los iPhone
+ * recientes añaden audio espacial (APAC) que FFmpeg no soporta y aparece como
+ * "Audio: none": si fuera la primera pista, la compresión fallaría.
+ */
+function pickAudio(stderr) {
+  const streams = [...stderr.matchAll(/Stream #0:(\d+)[^:]*: Audio: (\w+)/g)];
+  const usable = streams.find((m) => m[2] !== 'none');
+  return { hasAudio: Boolean(usable), audioIndex: usable ? Number(usable[1]) : null };
 }
 
 /** Lee la información del archivo (duración, FPS y si tiene audio) sin procesarlo. */
@@ -291,10 +324,10 @@ function probeInput(ffmpeg, inputPath) {
     });
     let stderr = '';
     proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
-    proc.on('error', () => resolve({ hasAudio: false, duration: null, fps: 30 }));
+    proc.on('error', () => resolve({ hasAudio: false, audioIndex: null, duration: null, fps: 30 }));
     proc.on('close', () =>
       resolve({
-        hasAudio: /Stream #0:\d+.*Audio:/.test(stderr),
+        ...pickAudio(stderr),
         duration: parseDuration(stderr),
         fps: parseFps(stderr),
       }),
@@ -315,7 +348,7 @@ async function detectSilences(ffmpeg, inputPath, probe, options, onProgress) {
     ffmpeg,
     [
       '-hide_banner', '-nostdin', '-i', inputPath,
-      '-map', '0:a:0', '-vn',
+      '-map', `0:${probe.audioIndex}`, '-vn',
       '-af', `silencedetect=noise=${threshold}dB:d=${minDuration}`,
       '-f', 'null', '-progress', 'pipe:1', '-nostats', '-',
     ],
@@ -325,11 +358,15 @@ async function detectSilences(ffmpeg, inputPath, probe, options, onProgress) {
   return { hasAudio: true, duration, silences: parseSilences(stderr, duration) };
 }
 
+function encoderClosedError() {
+  const err = new Error('El codificador se cerró antes de tiempo.');
+  err.encoderClosed = true;
+  return err;
+}
+
 /** Escribe en un stream respetando la contrapresión; falla si se cierra. */
 function writeAsync(stream, buf) {
-  if (stream.destroyed || stream.writableEnded) {
-    return Promise.reject(new Error('El codificador se cerró antes de tiempo.'));
-  }
+  if (stream.destroyed || stream.writableEnded) return Promise.reject(encoderClosedError());
   if (stream.write(buf)) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const cleanup = () => {
@@ -337,7 +374,7 @@ function writeAsync(stream, buf) {
       stream.off('close', onClose);
     };
     const onDrain = () => { cleanup(); resolve(); };
-    const onClose = () => { cleanup(); reject(new Error('El codificador se cerró antes de tiempo.')); };
+    const onClose = () => { cleanup(); reject(encoderClosedError()); };
     stream.on('drain', onDrain);
     stream.on('close', onClose);
   });
@@ -356,6 +393,12 @@ async function compressVideo(inputPath, outputDir, baseName, options = {}, onPro
   const details = { format: 'mp4' };
   onProgress(0, options.removeSilence ? 'silencios' : options.blurFaces ? 'caras' : 'comprimiendo');
   const probe = await probeInput(ffmpeg, inputPath);
+  // Pista de audio a usar (o ninguna si el video no tiene audio utilizable).
+  const encodeOptions = {
+    ...options,
+    audioIndex: probe.audioIndex,
+    removeAudio: options.removeAudio || !probe.hasAudio,
+  };
 
   // Reparto de la barra de progreso entre las fases.
   const weights = {
@@ -416,7 +459,7 @@ async function compressVideo(inputPath, outputDir, baseName, options = {}, onPro
   if (tracks && tracks.length) {
     const fps = options.maxFps ? Math.min(probe.fps, Number(options.maxFps)) : probe.fps;
     const style = options.faceStyle === 'desenfoque' ? 'desenfoque' : 'pixelado';
-    const args = buildArgs(inputPath, outputPath, options, segments, { fps });
+    const args = buildArgs(inputPath, outputPath, encodeOptions, segments, { fps });
     await runFfmpeg(ffmpeg, args, {
       expectedDuration: expectedDuration || probe.duration,
       onProgress: encodeProgress,
@@ -439,7 +482,7 @@ async function compressVideo(inputPath, outputDir, baseName, options = {}, onPro
       },
     });
   } else {
-    const args = buildArgs(inputPath, outputPath, options, segments);
+    const args = buildArgs(inputPath, outputPath, encodeOptions, segments);
     await runFfmpeg(ffmpeg, args, { expectedDuration, onProgress: encodeProgress });
   }
 
@@ -457,4 +500,5 @@ module.exports = {
   CRF,
   getFfmpeg,
   FFMPEG_HELP,
+  ffmpegReason,
 };

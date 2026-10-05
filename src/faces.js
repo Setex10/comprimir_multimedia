@@ -200,7 +200,10 @@ function spawnDecoder(ffmpeg, inputPath, videoFilter) {
     proc.on('error', reject);
     proc.on('close', (code, signal) => {
       if (code === 0 || signal === 'SIGKILL') resolve();
-      else reject(new Error(`FFmpeg no pudo leer el video: ${stderr.trim().split('\n').pop() || code}`));
+      else {
+        const reason = stderr.trim().split(/\r?\n/).slice(-3).join(' | ').slice(0, 600);
+        reject(new Error(`FFmpeg no pudo leer el video (${code !== null ? `código ${code}` : signal}): ${reason || 'sin detalles'}`));
+      }
     });
   });
   done.catch(() => {});
