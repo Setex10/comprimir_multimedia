@@ -175,3 +175,5 @@ button.ghost { background: transparent; color: var(--text); border: 1px solid va
   .result { grid-column: 1 / -1; flex-direction: row; justify-content: space-between; align-items: center; }
 }
 .hint { display: block; margin-top: 4px; font-size: 0.78rem; color: var(--muted); }
+.sub-options { margin: 4px 0 0 24px; }
+.sub-options[hidden] { display: none; }

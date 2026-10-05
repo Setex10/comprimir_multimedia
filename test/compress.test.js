@@ -153,3 +153,73 @@ test('una foto HEIC ilegible devuelve un error claro', async () => {
   assert.equal(job.status, 'error');
   assert.match(job.error, /HEIC/);
 });
+
+test('keepSegments conserva los tramos con sonido y un margen en cada corte', () => {
+  const { keepSegments } = require('../src/video');
+  const keep = keepSegments([{ start: 0, end: 1 }, { start: 3, end: 6 }, { start: 9, end: 10 }], 10, 0.1);
+  assert.deepEqual(
+    keep.map((k) => [Number(k.start.toFixed(2)), Number(k.end.toFixed(2))]),
+    [[0.9, 3.1], [5.9, 9.1]],
+  );
+});
+
+test('parseSilences lee la salida de silencedetect, incluido un silencio hasta el final', () => {
+  const { parseSilences } = require('../src/video');
+  const out = [
+    '[silencedetect @ 0x1] silence_start: 2.01',
+    '[silencedetect @ 0x1] silence_end: 5.002 | silence_duration: 2.99',
+    '[silencedetect @ 0x1] silence_start: 8.5',
+  ].join('\n');
+  assert.deepEqual(parseSilences(out, 10), [{ start: 2.01, end: 5.002 }, { start: 8.5, end: 10 }]);
+});
+
+function probeDurations(file) {
+  const info = spawnSync(FFMPEG_PATH, ['-hide_banner', '-i', file, '-f', 'null', '-']).stderr.toString();
+  const times = [...info.matchAll(/time=(\d+):(\d+):([\d.]+)/g)];
+  const last = times[times.length - 1];
+  return { info, seconds: Number(last[1]) * 3600 + Number(last[2]) * 60 + Number(last[3]) };
+}
+
+test('elimina los silencios de un video manteniendo audio y video sincronizados', async () => {
+  const input = path.join(tmp, 'con-silencios.mp4');
+  // 7 s: tono 0-2 s, silencio 2-5 s, tono 5-7 s.
+  const gen = spawnSync(FFMPEG_PATH, [
+    '-y', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30:duration=7',
+    '-f', 'lavfi', '-i', "aevalsrc='if(between(t,2,5),0,0.5*sin(2*PI*440*t))':s=44100:d=7",
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', '-shortest', input,
+  ]);
+  assert.equal(gen.status, 0, gen.stderr?.toString());
+
+  const job = await submit(input, { removeSilence: true, minSilence: 1 });
+  assert.equal(job.status, 'done', job.error);
+  assert.ok(Math.abs(job.details.originalDuration - 7) < 0.2, `duración original ${job.details.originalDuration}`);
+  // Se quitan ~3 s menos los márgenes (2 × 0,15 s).
+  assert.ok(Math.abs(job.details.removedSeconds - 2.7) < 0.3, `quitados ${job.details.removedSeconds}`);
+
+  const out = path.join(tmp, 'sin-silencios.mp4');
+  fs.writeFileSync(out, Buffer.from(await (await fetch(`${base}/api/jobs/${job.id}/download`)).arrayBuffer()));
+  const { info, seconds } = probeDurations(out);
+  assert.match(info, /Audio: aac/);
+  assert.ok(Math.abs(seconds - 4.3) < 0.3, `duración final ${seconds}`);
+
+  // Audio y video deben durar lo mismo (sin desincronización).
+  const a = spawnSync(FFMPEG_PATH, ['-hide_banner', '-i', out, '-map', '0:a', '-f', 'null', '-']).stderr.toString();
+  const vOnly = spawnSync(FFMPEG_PATH, ['-hide_banner', '-i', out, '-map', '0:v', '-f', 'null', '-']).stderr.toString();
+  const lastTime = (s) => {
+    const m = [...s.matchAll(/time=(\d+):(\d+):([\d.]+)/g)].pop();
+    return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+  };
+  assert.ok(Math.abs(lastTime(a) - lastTime(vOnly)) < 0.15, `audio ${lastTime(a)} vs video ${lastTime(vOnly)}`);
+});
+
+test('quitar silencios en un video sin audio no falla', async () => {
+  const input = path.join(tmp, 'mudo.mp4');
+  const gen = spawnSync(FFMPEG_PATH, [
+    '-y', '-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=30:duration=1',
+    '-c:v', 'libx264', '-preset', 'ultrafast', input,
+  ]);
+  assert.equal(gen.status, 0);
+  const job = await submit(input, { removeSilence: true });
+  assert.equal(job.status, 'done', job.error);
+  assert.match(job.details.silenceNote, /no tiene audio/);
+});

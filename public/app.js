@@ -15,6 +15,12 @@
   let activeUploads = 0;
   const MAX_PARALLEL_UPLOADS = 2;
 
+  function formatSeconds(sec) {
+    const s = Math.round(sec);
+    if (s < 60) return `${sec < 10 ? sec.toFixed(1).replace('.', ',') : s} s`;
+    return `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, '0')} s`;
+  }
+
   function formatBytes(bytes) {
     if (bytes == null) return '—';
     const units = ['B', 'KB', 'MB', 'GB'];
@@ -32,6 +38,9 @@
       maxResolution: $('maxResolution').value,
       maxFps: $('maxFps').value,
       removeAudio: $('removeAudio').checked,
+      removeSilence: $('removeSilence').checked,
+      minSilence: $('minSilence').value,
+      silenceSensitivity: $('silenceSensitivity').value,
     };
   }
 
@@ -114,7 +123,11 @@
         setProgress(item, p * 0.3, `${sizeText} · subiendo ${Math.round(p)}%`);
       });
       job = await poll(job.id, (j) => {
-        const label = j.status === 'queued' ? 'en espera' : `comprimiendo${j.kind === 'video' ? ` ${j.progress}%` : '…'}`;
+        const label = j.status === 'queued'
+          ? 'en espera'
+          : j.kind === 'video'
+            ? `${options.removeSilence && j.progress < 15 ? 'buscando silencios' : 'comprimiendo'} ${j.progress}%`
+            : 'comprimiendo…';
         setProgress(item, 30 + j.progress * 0.7, `${sizeText} · ${label}`);
       });
       if (job.status === 'error') throw new Error(job.error);
@@ -136,6 +149,11 @@
       parts.push(resized ? `${d.originalWidth}×${d.originalHeight} → ${d.width}×${d.height}` : `${d.width}×${d.height}`);
     }
     if (d.format) parts.push(d.format.toUpperCase());
+    if (d.removedSeconds) {
+      parts.push(`${formatSeconds(d.originalDuration)} → ${formatSeconds(d.duration)} (−${formatSeconds(d.removedSeconds)} de silencios)`);
+    } else if (d.silenceNote) {
+      parts.push(d.silenceNote);
+    }
     if (job.keptOriginal) parts.push('ya estaba optimizado, se mantiene el original');
 
     setProgress(item, 100, parts.join(' · '));
@@ -160,6 +178,10 @@
     summaryText.textContent = text;
     zipBtn.disabled = done.length === 0;
   }
+
+  const syncSilenceOptions = () => { $('silenceOptions').hidden = !$('removeSilence').checked; };
+  $('removeSilence').addEventListener('change', syncSilenceOptions);
+  syncSilenceOptions();
 
   zipBtn.addEventListener('click', () => {
     const ids = items.filter((i) => i.job).map((i) => i.job.id);

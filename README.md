@@ -36,6 +36,11 @@ manteniendo la mayor resolución y calidad visual posible para que tu tienda car
   verticales (Reels/TikTok) y nunca agranda.
 - Límite de FPS (p. ej. 60 → 30 fps, ahorra mucho peso sin diferencia visible en una tienda).
 - Opción para **quitar el audio**, ideal para videos de fondo en banners/secciones hero.
+- **Eliminar silencios**: detecta los momentos sin sonido y los corta automáticamente, uniendo
+  el resto sin desincronizar audio y video. Puedes elegir a partir de qué duración se corta un
+  silencio (0,5 s, 1 s o 2 s) y la sensibilidad (cuánto ruido de fondo se considera silencio).
+  Se conserva un pequeño margen en cada corte para que no quede brusco. La app muestra la
+  duración antes/después y cuántos segundos se quitaron.
 - Acepta MP4, MOV, M4V, WebM, MKV, AVI…
 
 ### Niveles de calidad

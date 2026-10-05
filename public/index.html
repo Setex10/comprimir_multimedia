@@ -30,7 +30,7 @@
         <label class="field">
           <span>Formato de salida</span>
           <select id="format">
-            <option value="auto" selected>Automático (recomendado)</option>
+            <option value="auto" selected>Automático</option>
             <option value="jpeg">JPEG</option>
             <option value="webp">WebP</option>
             <option value="png">PNG</option>
@@ -73,6 +73,29 @@
           <input type="checkbox" id="removeAudio" />
           <span>Quitar audio (ideal para videos de fondo / banners)</span>
         </label>
+        <label class="check">
+          <input type="checkbox" id="removeSilence" />
+          <span>Eliminar silencios (corta los momentos sin sonido)</span>
+        </label>
+        <div id="silenceOptions" class="sub-options" hidden>
+          <label class="field">
+            <span>Cortar silencios de más de</span>
+            <select id="minSilence">
+              <option value="0.5">0,5 segundos</option>
+              <option value="1" selected>1 segundo</option>
+              <option value="2">2 segundos</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Sensibilidad</span>
+            <select id="silenceSensitivity">
+              <option value="baja">Baja (solo silencio total)</option>
+              <option value="normal" selected>Normal</option>
+              <option value="alta">Alta (también ruido de fondo suave)</option>
+            </select>
+          </label>
+          <small class="hint">Si corta de más, baja la sensibilidad; si no corta los silencios con ruido de fondo, súbela.</small>
+        </div>
       </fieldset>
     </section>
 

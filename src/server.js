@@ -94,6 +94,11 @@ function parseOptions(body) {
     maxResolution: Number(body.maxResolution) || 0,
     maxFps: Number(body.maxFps) || 0,
     removeAudio: body.removeAudio === 'true' || body.removeAudio === true,
+    removeSilence: body.removeSilence === 'true' || body.removeSilence === true,
+    silenceSensitivity: ['baja', 'normal', 'alta'].includes(body.silenceSensitivity)
+      ? body.silenceSensitivity
+      : 'normal',
+    minSilence: [0.5, 1, 2].includes(Number(body.minSilence)) ? Number(body.minSilence) : 1,
   };
 }
 
@@ -121,7 +126,7 @@ async function runJob(job, options) {
         result = await compressVideo(job.inputPath, OUTPUT_DIR, baseName, options, (p) => {
           job.progress = p;
         });
-        job.details = { format: 'mp4' };
+        job.details = result.details;
       }
 
       job.outputPath = result.outputPath;
@@ -129,9 +134,10 @@ async function runJob(job, options) {
 
       // Si el resultado pesa más que el original y es el mismo formato,
       // devolvemos el original: nunca empeoramos un archivo ya optimizado.
+      // (Salvo que se hayan quitado silencios: el contenido ya no es el mismo.)
       const inExt = path.extname(job.originalName).toLowerCase().replace('jpeg', 'jpg');
       const outExt = path.extname(result.outputPath).toLowerCase();
-      if (job.outputSize >= job.originalSize && inExt === outExt) {
+      if (job.outputSize >= job.originalSize && inExt === outExt && !job.details?.removedSeconds) {
         await fsp.rm(result.outputPath, { force: true });
         job.outputPath = path.join(OUTPUT_DIR, `${baseName}${outExt}`);
         await fsp.copyFile(job.inputPath, job.outputPath);
