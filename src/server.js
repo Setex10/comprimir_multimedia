@@ -275,8 +275,31 @@ app.use((err, req, res, _next) => {
 });
 
 if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log(`Compresor multimedia listo en http://localhost:${PORT}`);
+  start(PORT);
+}
+
+/**
+ * Arranca el servidor. Si el puerto está ocupado (p. ej. por otra copia de la app
+ * abierta en otra terminal) prueba los siguientes, salvo que PORT se haya fijado.
+ */
+function start(port, attempts = 0) {
+  // Express 5 entrega los errores de listen al callback en vez de lanzarlos.
+  app.listen(port, (err) => {
+    if (err) {
+      if (err.code === 'EADDRINUSE' && !process.env.PORT && attempts < 10) {
+        console.log(`El puerto ${port} está ocupado, probando el ${port + 1}…`);
+        return start(port + 1, attempts + 1);
+      }
+      console.error(
+        err.code === 'EADDRINUSE'
+          ? `No se pudo arrancar: el puerto ${port} está ocupado. Cierra la otra app que lo usa ` +
+            'o elige otro puerto con la variable PORT.'
+          : `No se pudo arrancar el servidor: ${err.message}`,
+      );
+      process.exit(1);
+    }
+    console.log(`Compresor multimedia listo en http://localhost:${port}`);
+    console.log('Deja esta ventana abierta mientras uses la app (Ctrl + C para cerrarla).');
     getFfmpeg().then((ffmpeg) => {
       if (ffmpeg) console.log(`FFmpeg listo: ${ffmpeg}`);
       else console.warn(`\n⚠  Los videos no funcionarán. ${FFMPEG_HELP}\n`);
