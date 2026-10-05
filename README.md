@@ -41,6 +41,16 @@ manteniendo la mayor resolución y calidad visual posible para que tu tienda car
   silencio (0,5 s, 1 s o 2 s) y la sensibilidad (cuánto ruido de fondo se considera silencio).
   Se conserva un pequeño margen en cada corte para que no quede brusco. La app muestra la
   duración antes/después y cuántos segundos se quitaron.
+- **Censurar caras**: detecta las caras con un modelo de IA que funciona dentro de la app
+  (sin enviar nada a internet), las sigue mientras se mueven y las **pixela** o **desenfoca**
+  con un óvalo. Entre detecciones la posición se interpola y cada aparición se extiende un
+  instante antes y después para que no se escape ningún fotograma.
+  - *Precisión normal*: caras medianas y grandes (a partir de ~7 % del ancho del video).
+  - *Precisión alta*: analiza además la imagen por zonas y encuentra caras pequeñas o lejanas
+    (≈ 3 % del ancho); tarda bastante más.
+  - Limitaciones: caras de perfil muy marcado, tapadas o muy oscuras pueden no detectarse.
+    **Revisa siempre el video antes de publicarlo.**
+  - Se puede combinar con eliminar silencios, cambiar resolución, FPS, etc.
 - Acepta MP4, MOV, M4V, WebM, MKV, AVI…
 
 ### Niveles de calidad
@@ -80,6 +90,8 @@ docker run -p 3000:3000 compresor-multimedia
 | `PORT`          | `3000`      | Puerto del servidor                        |
 | `MAX_UPLOAD_MB` | `2048`      | Tamaño máximo por archivo subido (MB)      |
 | `FFMPEG_PATH`   | (incluido)  | Ruta a un binario de FFmpeg alternativo    |
+| `APP_PASSWORD`  | (ninguna)   | Si se define, la app pide esta contraseña (útil al publicarla en internet) |
+| `VIDEO_PRESET`  | `slow`      | Preset de x264; `medium` o `fast` comprimen más rápido en servidores modestos |
 
 ## Consejos para Shopify
 

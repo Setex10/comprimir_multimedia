@@ -96,6 +96,27 @@
           </label>
           <small class="hint">Si corta de más, baja la sensibilidad; si no corta los silencios con ruido de fondo, súbela.</small>
         </div>
+        <label class="check">
+          <input type="checkbox" id="blurFaces" />
+          <span>Censurar caras (detecta y sigue cada cara)</span>
+        </label>
+        <div id="faceOptions" class="sub-options" hidden>
+          <label class="field">
+            <span>Estilo</span>
+            <select id="faceStyle">
+              <option value="pixelado" selected>Pixelado</option>
+              <option value="desenfoque">Desenfoque</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Precisión</span>
+            <select id="facePrecision">
+              <option value="normal" selected>Normal</option>
+              <option value="alta">Alta (más lenta)</option>
+            </select>
+          </label>
+          <small class="hint">Alta también encuentra caras pequeñas o lejanas. Revisa siempre el resultado: las caras de perfil o tapadas pueden no detectarse.</small>
+        </div>
       </fieldset>
     </section>
 

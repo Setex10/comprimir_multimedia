@@ -15,6 +15,12 @@
   let activeUploads = 0;
   const MAX_PARALLEL_UPLOADS = 2;
 
+  const PHASES = {
+    silencios: 'buscando silencios',
+    caras: 'detectando caras',
+    comprimiendo: 'comprimiendo',
+  };
+
   function formatSeconds(sec) {
     const s = Math.round(sec);
     if (s < 60) return `${sec < 10 ? sec.toFixed(1).replace('.', ',') : s} s`;
@@ -41,6 +47,9 @@
       removeSilence: $('removeSilence').checked,
       minSilence: $('minSilence').value,
       silenceSensitivity: $('silenceSensitivity').value,
+      blurFaces: $('blurFaces').checked,
+      faceStyle: $('faceStyle').value,
+      facePrecision: $('facePrecision').value,
     };
   }
 
@@ -126,7 +135,7 @@
         const label = j.status === 'queued'
           ? 'en espera'
           : j.kind === 'video'
-            ? `${options.removeSilence && j.progress < 15 ? 'buscando silencios' : 'comprimiendo'} ${j.progress}%`
+            ? `${PHASES[j.phase] || 'comprimiendo'} ${j.progress}%`
             : 'comprimiendo…';
         setProgress(item, 30 + j.progress * 0.7, `${sizeText} · ${label}`);
       });
@@ -154,6 +163,8 @@
     } else if (d.silenceNote) {
       parts.push(d.silenceNote);
     }
+    if (d.faces) parts.push('caras censuradas');
+    else if (d.facesNote) parts.push(d.facesNote);
     if (job.keptOriginal) parts.push('ya estaba optimizado, se mantiene el original');
 
     setProgress(item, 100, parts.join(' · '));
@@ -179,9 +190,12 @@
     zipBtn.disabled = done.length === 0;
   }
 
-  const syncSilenceOptions = () => { $('silenceOptions').hidden = !$('removeSilence').checked; };
-  $('removeSilence').addEventListener('change', syncSilenceOptions);
-  syncSilenceOptions();
+  const toggles = [['removeSilence', 'silenceOptions'], ['blurFaces', 'faceOptions']];
+  for (const [check, panel] of toggles) {
+    const sync = () => { $(panel).hidden = !$(check).checked; };
+    $(check).addEventListener('change', sync);
+    sync();
+  }
 
   zipBtn.addEventListener('click', () => {
     const ids = items.filter((i) => i.job).map((i) => i.job.id);

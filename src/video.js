@@ -1,6 +1,7 @@
 const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const faces = require('./faces');
 
 const FFMPEG_HELP =
   'No se encontró FFmpeg. Soluciones: 1) ejecuta "npm rebuild ffmpeg-static" en la carpeta ' +
@@ -149,7 +150,13 @@ function parseSilences(stderr, duration) {
   return silences;
 }
 
-function buildArgs(inputPath, outputPath, options = {}, segments = null) {
+/**
+ * Construye los argumentos del codificador.
+ * @param segments tramos a conservar (eliminar silencios) o null
+ * @param pipe si se indica ({fps}), el video llega como fotogramas PPM por stdin
+ *             (ya censurados) y el audio se toma del archivo original.
+ */
+function buildArgs(inputPath, outputPath, options = {}, segments = null, pipe = null) {
   const crf = CRF[options.quality] ?? CRF.alta;
   const filters = [];
   const scale = scaleFilter(options.maxResolution);
@@ -157,7 +164,15 @@ function buildArgs(inputPath, outputPath, options = {}, segments = null) {
   // x264 con yuv420p necesita dimensiones pares.
   filters.push('pad=ceil(iw/2)*2:ceil(ih/2)*2');
 
-  const args = ['-hide_banner', '-y', '-i', inputPath];
+  const args = ['-hide_banner', '-y'];
+  let video = '0:v:0';
+  let audio = '0:a:0';
+  if (pipe) {
+    args.push('-f', 'image2pipe', '-c:v', 'ppm', '-framerate', String(pipe.fps), '-i', 'pipe:0');
+    video = '0:v:0';
+    audio = '1:a:0';
+  }
+  args.push('-i', inputPath);
 
   if (segments) {
     // Recorta cada tramo con sonido y los une (vídeo y audio juntos para no
@@ -166,8 +181,8 @@ function buildArgs(inputPath, outputPath, options = {}, segments = null) {
     const parts = [];
     let inputs = '';
     segments.forEach((seg, i) => {
-      parts.push(`[0:v:0]trim=start=${t(seg.start)}:end=${t(seg.end)},setpts=PTS-STARTPTS[v${i}]`);
-      parts.push(`[0:a:0]atrim=start=${t(seg.start)}:end=${t(seg.end)},asetpts=PTS-STARTPTS[a${i}]`);
+      parts.push(`[${video}]trim=start=${t(seg.start)}:end=${t(seg.end)},setpts=PTS-STARTPTS[v${i}]`);
+      parts.push(`[${audio}]atrim=start=${t(seg.start)}:end=${t(seg.end)},asetpts=PTS-STARTPTS[a${i}]`);
       inputs += `[v${i}][a${i}]`;
     });
     parts.push(`${inputs}concat=n=${segments.length}:v=1:a=1[vc][ac]`);
@@ -175,13 +190,13 @@ function buildArgs(inputPath, outputPath, options = {}, segments = null) {
     args.push('-filter_complex', parts.join(';'), '-map', '[vout]');
     if (!options.removeAudio) args.push('-map', '[ac]');
   } else {
-    args.push('-map', '0:v:0', '-vf', filters.join(','));
-    if (!options.removeAudio) args.push('-map', '0:a:0?');
+    args.push('-map', video, '-vf', filters.join(','));
+    if (!options.removeAudio) args.push('-map', `${audio}?`);
   }
 
   args.push(
     '-c:v', 'libx264',
-    '-preset', options.preset || 'slow',
+    '-preset', options.preset || process.env.VIDEO_PRESET || 'slow',
     '-crf', String(crf),
     '-profile:v', 'high',
     '-pix_fmt', 'yuv420p',
@@ -193,7 +208,8 @@ function buildArgs(inputPath, outputPath, options = {}, segments = null) {
   );
 
   // Limita los FPS sin aumentar nunca los del original (p. ej. 60 → 30).
-  if (options.maxFps) args.push('-fpsmax', String(Number(options.maxFps)));
+  // (Con tubería los FPS ya se fijan al decodificar.)
+  if (options.maxFps && !pipe) args.push('-fpsmax', String(Number(options.maxFps)));
 
   if (options.removeAudio) args.push('-an');
   else args.push('-c:a', 'aac', '-b:a', '128k');
@@ -208,15 +224,25 @@ function parseDuration(stderr) {
   return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
 }
 
+/** FPS del primer stream de video (limitado a 1-60 para videos de FPS variable). */
+function parseFps(stderr) {
+  const line = (/Stream #0:\d+.*Video:.*/.exec(stderr) || [''])[0];
+  const m = /(\d+(?:\.\d+)?) fps/.exec(line) || /(\d+(?:\.\d+)?)k? tbr/.exec(line);
+  const fps = m ? Number(m[1]) : 30;
+  return Math.min(60, Math.max(1, fps || 30));
+}
+
 /**
  * Ejecuta FFmpeg informando del progreso (0-100) respecto a `expectedDuration`
  * (o la duración del archivo de entrada si no se indica). Devuelve el stderr.
+ * Si se pasa `feed`, se le entrega el stdin de FFmpeg para enviarle datos.
  */
-function runFfmpeg(ffmpeg, args, { expectedDuration = null, onProgress = () => {} } = {}) {
+function runFfmpeg(ffmpeg, args, { expectedDuration = null, onProgress = () => {}, feed = null } = {}) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(ffmpeg, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn(ffmpeg, args, { stdio: [feed ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
     let stderr = '';
     let duration = expectedDuration;
+    let feedError = null;
 
     proc.stderr.on('data', (chunk) => {
       stderr += chunk.toString();
@@ -236,9 +262,18 @@ function runFfmpeg(ffmpeg, args, { expectedDuration = null, onProgress = () => {
       }
     });
 
+    if (feed) {
+      proc.stdin.on('error', () => {}); // FFmpeg cerró la entrada: se informa al terminar.
+      feed(proc.stdin).catch((err) => {
+        feedError = err;
+        proc.kill('SIGKILL');
+      });
+    }
+
     proc.on('error', () => reject(new Error(FFMPEG_HELP)));
     proc.on('close', (code) => {
-      if (code === 0) resolve(stderr);
+      if (feedError) reject(feedError);
+      else if (code === 0) resolve(stderr);
       else {
         const tail = stderr.split('\n').slice(-8).join('\n');
         reject(new Error(`FFmpeg terminó con código ${code}:\n${tail}`));
@@ -247,11 +282,7 @@ function runFfmpeg(ffmpeg, args, { expectedDuration = null, onProgress = () => {
   });
 }
 
-/**
- * Analiza el audio y devuelve los silencios encontrados.
- * @returns {Promise<{hasAudio:boolean, duration:number|null, silences:{start,end}[]}>}
- */
-/** Lee la información del archivo (duración y si tiene audio) sin procesarlo. */
+/** Lee la información del archivo (duración, FPS y si tiene audio) sin procesarlo. */
 function probeInput(ffmpeg, inputPath) {
   return new Promise((resolve) => {
     // "ffmpeg -i" sin salida termina con error, pero imprime la información.
@@ -260,15 +291,22 @@ function probeInput(ffmpeg, inputPath) {
     });
     let stderr = '';
     proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
-    proc.on('error', () => resolve({ hasAudio: false, duration: null }));
+    proc.on('error', () => resolve({ hasAudio: false, duration: null, fps: 30 }));
     proc.on('close', () =>
-      resolve({ hasAudio: /Stream #0:\d+.*Audio:/.test(stderr), duration: parseDuration(stderr) }),
+      resolve({
+        hasAudio: /Stream #0:\d+.*Audio:/.test(stderr),
+        duration: parseDuration(stderr),
+        fps: parseFps(stderr),
+      }),
     );
   });
 }
 
-async function detectSilences(ffmpeg, inputPath, options, onProgress) {
-  const probe = await probeInput(ffmpeg, inputPath);
+/**
+ * Analiza el audio y devuelve los silencios encontrados.
+ * @returns {Promise<{hasAudio:boolean, duration:number|null, silences:{start,end}[]}>}
+ */
+async function detectSilences(ffmpeg, inputPath, probe, options, onProgress) {
   if (!probe.hasAudio) return { hasAudio: false, duration: probe.duration, silences: [] };
 
   const threshold = SILENCE_THRESHOLD[options.silenceSensitivity] ?? SILENCE_THRESHOLD.normal;
@@ -287,25 +325,56 @@ async function detectSilences(ffmpeg, inputPath, options, onProgress) {
   return { hasAudio: true, duration, silences: parseSilences(stderr, duration) };
 }
 
+/** Escribe en un stream respetando la contrapresión; falla si se cierra. */
+function writeAsync(stream, buf) {
+  if (stream.destroyed || stream.writableEnded) {
+    return Promise.reject(new Error('El codificador se cerró antes de tiempo.'));
+  }
+  if (stream.write(buf)) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      stream.off('drain', onDrain);
+      stream.off('close', onClose);
+    };
+    const onDrain = () => { cleanup(); resolve(); };
+    const onClose = () => { cleanup(); reject(new Error('El codificador se cerró antes de tiempo.')); };
+    stream.on('drain', onDrain);
+    stream.on('close', onClose);
+  });
+}
+
 /**
  * Comprime un video a MP4 (H.264 + AAC), el formato más compatible con Shopify
- * y todos los navegadores. Opcionalmente elimina los tramos sin sonido.
- * @param {(percent:number)=>void} onProgress
+ * y todos los navegadores. Opcionalmente elimina los tramos sin sonido y
+ * censura las caras.
+ * @param {(percent:number, phase:string)=>void} onProgress
  */
 async function compressVideo(inputPath, outputDir, baseName, options = {}, onProgress = () => {}) {
   const ffmpeg = await getFfmpeg();
   if (!ffmpeg) throw new Error(FFMPEG_HELP);
   const outputPath = path.join(outputDir, `${baseName}.mp4`);
   const details = { format: 'mp4' };
+  onProgress(0, options.removeSilence ? 'silencios' : options.blurFaces ? 'caras' : 'comprimiendo');
+  const probe = await probeInput(ffmpeg, inputPath);
+
+  // Reparto de la barra de progreso entre las fases.
+  const weights = {
+    silencios: options.removeSilence ? 5 : 0,
+    caras: options.blurFaces ? (options.facePrecision === 'alta' ? 55 : 35) : 0,
+  };
+  weights.comprimiendo = 100 - weights.silencios - weights.caras;
+  let base = 0;
+  const phase = (name) => {
+    const start = base;
+    base += weights[name];
+    return (p) => onProgress(start + (p * weights[name]) / 100, name);
+  };
 
   let segments = null;
   let expectedDuration = null;
-  let encodeStart = 0;
 
   if (options.removeSilence) {
-    // El análisis del audio es rápido: ocupa el primer 15 % de la barra.
-    encodeStart = 15;
-    const analysis = await detectSilences(ffmpeg, inputPath, options, (p) => onProgress(p * 0.15));
+    const analysis = await detectSilences(ffmpeg, inputPath, probe, options, phase('silencios'));
     if (!analysis.hasAudio) {
       details.silenceNote = 'el video no tiene audio, no se quitaron silencios';
     } else if (analysis.duration && analysis.silences.length) {
@@ -320,17 +389,61 @@ async function compressVideo(inputPath, outputDir, baseName, options = {}, onPro
         details.duration = expectedDuration;
         details.removedSeconds = analysis.duration - expectedDuration;
         details.cuts = analysis.silences.length;
+      } else {
+        expectedDuration = null;
       }
     }
     if (!segments && !details.silenceNote) details.silenceNote = 'no se encontraron silencios';
   }
 
-  const args = buildArgs(inputPath, outputPath, options, segments);
-  await runFfmpeg(ffmpeg, args, {
-    expectedDuration,
-    onProgress: (p) => onProgress(encodeStart + p * (1 - encodeStart / 100)),
-  });
-  onProgress(100);
+  let tracks = null;
+  let pad = 0;
+  if (options.blurFaces) {
+    const analysis = await faces.analyzeFaces(ffmpeg, inputPath, {
+      precision: options.facePrecision,
+      duration: probe.duration,
+      onProgress: phase('caras'),
+    });
+    tracks = faces.buildTracks(analysis.samples, analysis.interval);
+    // Margen de seguridad antes/después de cada aparición detectada.
+    pad = analysis.interval * 1.5 + 0.2;
+    details.faces = tracks.length;
+    if (!tracks.length) details.facesNote = 'no se detectaron caras';
+  }
+
+  const encodeProgress = phase('comprimiendo');
+
+  if (tracks && tracks.length) {
+    const fps = options.maxFps ? Math.min(probe.fps, Number(options.maxFps)) : probe.fps;
+    const style = options.faceStyle === 'desenfoque' ? 'desenfoque' : 'pixelado';
+    const args = buildArgs(inputPath, outputPath, options, segments, { fps });
+    await runFfmpeg(ffmpeg, args, {
+      expectedDuration: expectedDuration || probe.duration,
+      onProgress: encodeProgress,
+      feed: async (stdin) => {
+        const { proc, done } = faces.spawnDecoder(ffmpeg, inputPath, `fps=${fps},format=rgb24`);
+        try {
+          let k = 0;
+          for await (const frame of faces.readPpmFrames(proc.stdout)) {
+            const boxes = faces.boxesAt(tracks, k / fps, pad);
+            if (boxes.length) faces.censorFrame(frame, boxes, style);
+            await writeAsync(stdin, Buffer.from(`P6\n${frame.width} ${frame.height}\n255\n`, 'latin1'));
+            await writeAsync(stdin, frame.data);
+            k++;
+          }
+          await done;
+          stdin.end();
+        } finally {
+          proc.kill('SIGKILL');
+        }
+      },
+    });
+  } else {
+    const args = buildArgs(inputPath, outputPath, options, segments);
+    await runFfmpeg(ffmpeg, args, { expectedDuration, onProgress: encodeProgress });
+  }
+
+  onProgress(100, 'comprimiendo');
   return { outputPath, format: 'mp4', details };
 }
 
@@ -340,6 +453,7 @@ module.exports = {
   scaleFilter,
   keepSegments,
   parseSilences,
+  parseFps,
   CRF,
   getFfmpeg,
   FFMPEG_HELP,

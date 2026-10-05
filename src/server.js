@@ -76,6 +76,7 @@ function publicJob(job) {
     kind: job.kind,
     status: job.status,
     progress: Math.round(job.progress),
+    phase: job.phase,
     originalName: job.originalName,
     outputName: job.outputName,
     originalSize: job.originalSize,
@@ -99,6 +100,9 @@ function parseOptions(body) {
       ? body.silenceSensitivity
       : 'normal',
     minSilence: [0.5, 1, 2].includes(Number(body.minSilence)) ? Number(body.minSilence) : 1,
+    blurFaces: body.blurFaces === 'true' || body.blurFaces === true,
+    faceStyle: body.faceStyle === 'desenfoque' ? 'desenfoque' : 'pixelado',
+    facePrecision: body.facePrecision === 'alta' ? 'alta' : 'normal',
   };
 }
 
@@ -123,8 +127,9 @@ async function runJob(job, options) {
           originalHeight: result.originalHeight,
         };
       } else {
-        result = await compressVideo(job.inputPath, OUTPUT_DIR, baseName, options, (p) => {
+        result = await compressVideo(job.inputPath, OUTPUT_DIR, baseName, options, (p, phase) => {
           job.progress = p;
+          job.phase = phase;
         });
         job.details = result.details;
       }
@@ -134,10 +139,12 @@ async function runJob(job, options) {
 
       // Si el resultado pesa más que el original y es el mismo formato,
       // devolvemos el original: nunca empeoramos un archivo ya optimizado.
-      // (Salvo que se hayan quitado silencios: el contenido ya no es el mismo.)
+      // (Salvo que se hayan quitado silencios o censurado caras: el contenido ya no es
+      // el mismo y devolver el original anularía la censura.)
       const inExt = path.extname(job.originalName).toLowerCase().replace('jpeg', 'jpg');
       const outExt = path.extname(result.outputPath).toLowerCase();
-      if (job.outputSize >= job.originalSize && inExt === outExt && !job.details?.removedSeconds) {
+      const edited = job.details?.removedSeconds || job.details?.faces;
+      if (job.outputSize >= job.originalSize && inExt === outExt && !edited) {
         await fsp.rm(result.outputPath, { force: true });
         job.outputPath = path.join(OUTPUT_DIR, `${baseName}${outExt}`);
         await fsp.copyFile(job.inputPath, job.outputPath);
@@ -177,6 +184,24 @@ const upload = multer({
   dest: UPLOAD_DIR,
   limits: { fileSize: MAX_UPLOAD_MB * 1024 * 1024 },
 });
+
+app.get('/api/health', (req, res) => res.json({ ok: true }));
+
+// Contraseña opcional (variable APP_PASSWORD) para que nadie más use tu servidor
+// cuando la app está publicada en internet. El navegador la pide con su ventana nativa.
+if (process.env.APP_PASSWORD) {
+  const expected = Buffer.from(process.env.APP_PASSWORD);
+  app.use((req, res, next) => {
+    const [scheme, encoded] = (req.headers.authorization || '').split(' ');
+    const password = scheme === 'Basic' && encoded
+      ? Buffer.from(encoded, 'base64').toString().split(':').slice(1).join(':')
+      : '';
+    const given = Buffer.from(password);
+    if (given.length === expected.length && crypto.timingSafeEqual(given, expected)) return next();
+    res.set('WWW-Authenticate', 'Basic realm="Compresor multimedia", charset="UTF-8"');
+    res.status(401).send('Se requiere contraseña.');
+  });
+}
 
 app.use(express.static(path.join(__dirname, '..', 'public')));
 

@@ -223,3 +223,144 @@ test('quitar silencios en un video sin audio no falla', async () => {
   assert.equal(job.status, 'done', job.error);
   assert.match(job.details.silenceNote, /no tiene audio/);
 });
+
+test('APP_PASSWORD protege la app cuando está configurada', () => {
+  const script = `
+    process.env.APP_PASSWORD = 'secreta';
+    const { app } = require('./src/server');
+    const s = app.listen(0, async () => {
+      const url = 'http://127.0.0.1:' + s.address().port;
+      const auth = (p) => ({ headers: { Authorization: 'Basic ' + Buffer.from('tienda:' + p).toString('base64') } });
+      const r = [
+        (await fetch(url + '/')).status,
+        (await fetch(url + '/', auth('mala'))).status,
+        (await fetch(url + '/', auth('secreta'))).status,
+        (await fetch(url + '/api/health')).status,
+      ];
+      console.log(JSON.stringify(r));
+      s.close();
+    });`;
+  const out = spawnSync(process.execPath, ['-e', script], { cwd: path.join(__dirname, '..') });
+  assert.equal(out.stdout.toString().trim(), '[401,401,200,200]', out.stderr.toString());
+});
+
+// ---------------------------------------------------------------------------
+// Censura de caras
+// ---------------------------------------------------------------------------
+const faces = require('../src/faces');
+const { Readable } = require('stream');
+
+test('buildTracks une detecciones de la misma cara e interpola entre ellas', () => {
+  const box = (x) => ({ x, y: 0.2, w: 0.1, h: 0.15, score: 0.9 });
+  const samples = [
+    { t: 0, boxes: [box(0.1)] },
+    { t: 0.5, boxes: [box(0.2), { x: 0.8, y: 0.5, w: 0.1, h: 0.1, score: 0.95 }] },
+    { t: 1, boxes: [box(0.3)] },
+  ];
+  const tracks = faces.buildTracks(samples, 0.5);
+  assert.equal(tracks.length, 2);
+  const [moving] = tracks;
+  assert.equal(moving.points.length, 3);
+  // A mitad de camino entre 0.5 s y 1 s la caja está entre 0.2 y 0.3.
+  const mid = faces.boxesAt(tracks, 0.75, 0.3).find((b) => b.x < 0.5);
+  assert.ok(Math.abs(mid.x - 0.25) < 1e-9);
+  // El margen extiende la pista antes de la primera detección...
+  assert.equal(faces.boxesAt(tracks, -0.2, 0.3).length, 1);
+  // ...pero no indefinidamente.
+  assert.equal(faces.boxesAt(tracks, 2, 0.3).length, 0);
+});
+
+test('readPpmFrames reconstruye fotogramas aunque lleguen troceados', async () => {
+  const frame = (v) => Buffer.concat([Buffer.from('P6\n3 2\n255\n'), Buffer.alloc(18, v)]);
+  const all = Buffer.concat([frame(1), frame(2)]);
+  const chunks = [all.subarray(0, 5), all.subarray(5, 20), all.subarray(20, 31), all.subarray(31)];
+  const out = [];
+  for await (const f of faces.readPpmFrames(Readable.from(chunks))) out.push(f);
+  assert.equal(out.length, 2);
+  assert.deepEqual([out[0].width, out[0].height], [3, 2]);
+  assert.ok(out[0].data.every((b) => b === 1) && out[1].data.every((b) => b === 2));
+});
+
+test('el mosaico de búsqueda cubre todo el fotograma', () => {
+  for (const [w, h] of [[1920, 1080], [1080, 1920]]) {
+    const tiles = faces.tileGrid(w, h);
+    assert.ok(tiles.every((t) => t.x >= 0 && t.y >= 0 && t.x + t.w <= w && t.y + t.h <= h));
+    for (const [x, y] of [[0, 0], [w - 1, h - 1], [w / 2, h / 2], [w - 1, 0], [0, h - 1]]) {
+      assert.ok(tiles.some((t) => x >= t.x && x < t.x + t.w && y >= t.y && y < t.y + t.h), `${w}x${h} (${x},${y})`);
+    }
+  }
+});
+
+/** Cuenta los fotogramas de un video en los que el detector ve una cara con confianza. */
+async function framesWithFaces(file, minScore) {
+  const { tf, faceapi } = await faces.loadDetector();
+  const { proc, done } = faces.spawnDecoder(FFMPEG_PATH, file, 'format=rgb24');
+  let frames = 0;
+  let withFaces = 0;
+  for await (const fr of faces.readPpmFrames(proc.stdout)) {
+    const img = tf.tensor3d(new Uint8Array(fr.data.buffer, fr.data.byteOffset, fr.data.length), [fr.height, fr.width, 3], 'int32');
+    const dets = await faceapi.detectAllFaces(img, new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: minScore }));
+    img.dispose();
+    frames++;
+    if (dets.length) withFaces++;
+  }
+  await done;
+  return { frames, withFaces };
+}
+
+test('censura una cara en movimiento en todos los fotogramas', { timeout: 180000 }, async () => {
+  const input = path.join(tmp, 'cara-movil.mp4');
+  const fixture = path.join(__dirname, 'fixtures', 'astronauta.jpg');
+  const gen = spawnSync(FFMPEG_PATH, [
+    '-y', '-f', 'lavfi', '-i', 'color=c=0x556677:s=1280x720:r=25:d=3',
+    '-loop', '1', '-i', fixture,
+    '-f', 'lavfi', '-i', 'sine=f=300:d=3',
+    '-filter_complex', "[1:v]scale=680:-1[f];[0:v][f]overlay=x='-40+t*180':y=-60:shortest=1,format=yuv420p[v]",
+    '-map', '[v]', '-map', '2:a', '-t', '3', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '14', '-c:a', 'aac', input,
+  ]);
+  assert.equal(gen.status, 0, gen.stderr?.toString());
+
+  const before = await framesWithFaces(input, 0.6);
+  assert.ok(before.withFaces >= before.frames * 0.9, `el original debe tener la cara visible (${JSON.stringify(before)})`);
+
+  const job = await submit(input, { blurFaces: true, faceStyle: 'pixelado' });
+  assert.equal(job.status, 'done', job.error);
+  assert.ok(job.details.faces >= 1);
+
+  const out = path.join(tmp, 'cara-movil-censurada.mp4');
+  fs.writeFileSync(out, Buffer.from(await (await fetch(`${base}/api/jobs/${job.id}/download`)).arrayBuffer()));
+  const after = await framesWithFaces(out, 0.6);
+  assert.equal(after.frames, before.frames, 'no se deben perder fotogramas');
+  assert.equal(after.withFaces, 0, `ninguna cara debe quedar visible (${JSON.stringify(after)})`);
+
+  const probe = spawnSync(FFMPEG_PATH, ['-hide_banner', '-i', out]).stderr.toString();
+  assert.match(probe, /Audio: aac/);
+});
+
+test('censurar caras junto con eliminar silencios mantiene la sincronización', { timeout: 180000 }, async () => {
+  const input = path.join(tmp, 'cara-silencio.mp4');
+  const fixture = path.join(__dirname, 'fixtures', 'astronauta.jpg');
+  const gen = spawnSync(FFMPEG_PATH, [
+    '-y', '-f', 'lavfi', '-i', 'color=c=0x556677:s=640x360:r=25:d=6',
+    '-loop', '1', '-i', fixture,
+    '-f', 'lavfi', '-i', "aevalsrc='if(between(t,2,4),0,0.5*sin(2*PI*440*t))':s=44100:d=6",
+    '-filter_complex', '[1:v]scale=300:-1[f];[0:v][f]overlay=x=150:y=20:shortest=1,format=yuv420p[v]',
+    '-map', '[v]', '-map', '2:a', '-t', '6', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', input,
+  ]);
+  assert.equal(gen.status, 0, gen.stderr?.toString());
+  const job = await submit(input, { blurFaces: true, faceStyle: 'desenfoque', removeSilence: true, minSilence: 1 });
+  assert.equal(job.status, 'done', job.error);
+  assert.ok(job.details.faces >= 1);
+  assert.ok(Math.abs(job.details.removedSeconds - 1.7) < 0.3, `quitados ${job.details.removedSeconds}`);
+
+  const out = path.join(tmp, 'cara-silencio-out.mp4');
+  fs.writeFileSync(out, Buffer.from(await (await fetch(`${base}/api/jobs/${job.id}/download`)).arrayBuffer()));
+  const lastTime = (map) => {
+    const s = spawnSync(FFMPEG_PATH, ['-hide_banner', '-i', out, '-map', map, '-f', 'null', '-']).stderr.toString();
+    const m = [...s.matchAll(/time=(\d+):(\d+):([\d.]+)/g)].pop();
+    return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+  };
+  const a = lastTime('0:a');
+  const v = lastTime('0:v');
+  assert.ok(Math.abs(a - v) < 0.15 && Math.abs(v - 4.3) < 0.3, `audio ${a} video ${v}`);
+});
