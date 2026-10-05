@@ -364,3 +364,77 @@ test('censurar caras junto con eliminar silencios mantiene la sincronización', 
   const v = lastTime('0:v');
   assert.ok(Math.abs(a - v) < 0.15 && Math.abs(v - 4.3) < 0.3, `audio ${a} video ${v}`);
 });
+
+test('headFromPose sitúa la cabeza encima de los hombros si no se ve la cara', () => {
+  // 17 puntos (y, x, score) + caja (ymin, xmin, ymax, xmax, score); solo hombros visibles.
+  const p = new Array(56).fill(0);
+  const set = (i, x, y, score) => { p[3 * i] = y; p[3 * i + 1] = x; p[3 * i + 2] = score; };
+  set(5, 0.6, 0.5, 0.9); // hombro izquierdo
+  set(6, 0.4, 0.5, 0.9); // hombro derecho
+  p[51] = 0.2; p[52] = 0.3; p[53] = 1; p[54] = 0.7; p[55] = 0.8;
+  const head = faces.headFromPose(p, 1000);
+  assert.ok(head, 'debe devolver una cabeza');
+  const cx = head.x + head.w / 2;
+  const cy = head.y + head.h / 2;
+  assert.ok(Math.abs(cx - 500) < 1, `centrada entre los hombros (${cx})`);
+  assert.ok(cy < 500 - 100, `por encima de los hombros (${cy})`);
+  assert.ok(head.w > 120 && head.w < 220, `tamaño proporcional a los hombros (${head.w})`);
+  // Sin persona detectada no hay cabeza.
+  p[55] = 0.05;
+  assert.equal(faces.headFromPose(p, 1000), null);
+});
+
+test('censura la cabeza aunque la persona deje de mostrar la cara', { timeout: 180000 }, async () => {
+  const fixture = path.join(__dirname, 'fixtures', 'astronauta.jpg');
+  const hidden = path.join(tmp, 'sin-cara.png');
+  // Tapa la cara (como si la persona mirara hacia otro lado).
+  const patch = Buffer.from('<svg width="400" height="400"><ellipse cx="173" cy="100" rx="50" ry="57" fill="#8a6a3a"/></svg>');
+  await sharp(fixture).composite([{ input: patch }]).png().toFile(hidden);
+
+  const input = path.join(tmp, 'girada.mp4');
+  const gen = spawnSync(FFMPEG_PATH, [
+    '-y', '-f', 'lavfi', '-i', 'color=c=0x556677:s=1280x720:r=25:d=4',
+    '-loop', '1', '-i', fixture, '-loop', '1', '-i', hidden,
+    '-filter_complex',
+    "[1:v]scale=640:-1[a];[2:v]scale=640:-1[b];[0:v][a]overlay=x='100+t*60':y=40:enable='lt(t,1)':shortest=1[t1];" +
+      "[t1][b]overlay=x='100+t*60':y=40:enable='gte(t,1)':shortest=1,format=yuv420p[v]",
+    '-map', '[v]', '-t', '4', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '14', input,
+  ]);
+  assert.equal(gen.status, 0, gen.stderr?.toString());
+
+  const job = await submit(input, { blurFaces: true });
+  assert.equal(job.status, 'done', job.error);
+  const out = path.join(tmp, 'girada-out.mp4');
+  fs.writeFileSync(out, Buffer.from(await (await fetch(`${base}/api/jobs/${job.id}/download`)).arrayBuffer()));
+
+  // En cada fotograma, la zona de la cabeza debe perder la mayor parte de su detalle.
+  const readAll = async (file) => {
+    const { proc, done } = faces.spawnDecoder(FFMPEG_PATH, file, 'format=rgb24');
+    const frames = [];
+    for await (const f of faces.readPpmFrames(proc.stdout)) frames.push(f);
+    await done;
+    return frames;
+  };
+  const detail = (f, x0, y0, x1, y1) => {
+    let e = 0;
+    let n = 0;
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0; x < x1 - 1; x++) {
+        const i = (y * f.width + x) * 3;
+        e += Math.abs(f.data[i] - f.data[i + 3]) + Math.abs(f.data[i + 1] - f.data[i + 4]);
+        n++;
+      }
+    }
+    return e / n;
+  };
+  const [orig, cens] = await Promise.all([readAll(input), readAll(out)]);
+  assert.equal(cens.length, orig.length);
+  const uncensored = [];
+  orig.forEach((f, k) => {
+    const ox = Math.round(100 + (k / 25) * 60);
+    // La cabeza ocupa aprox. x 0.30-0.56, y 0.05-0.40 de la foto (640 px de ancho).
+    const box = [ox + 190, 40 + 30, ox + 360, 40 + 260];
+    if (detail(cens[k], ...box) / detail(f, ...box) > 0.6) uncensored.push(k);
+  });
+  assert.deepEqual(uncensored, [], 'fotogramas con la cabeza sin censurar');
+});

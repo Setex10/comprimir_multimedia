@@ -1,3 +1,4 @@
+const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 
@@ -14,16 +15,18 @@ const { spawn } = require('child_process');
  */
 
 const PRECISION = {
-  // Imagen completa: detecta caras desde ~7 % del ancho del video.
-  normal: { fps: 8, maxSide: 960, tiles: false },
-  // Imagen completa + mosaico solapado: detecta caras pequeñas (~3 % del ancho).
+  // Imagen completa: caras desde ~7 % del ancho del video y cuerpos/cabezas.
+  normal: { fps: 6, maxSide: 960, tiles: false },
+  // Además, mosaico solapado para caras pequeñas (~3 % del ancho).
   alta: { fps: 5, maxSide: 1920, tiles: true },
 };
 
 const SCORE_THRESHOLD = 0.45;
-// Margen alrededor de la caja detectada (incluye frente, pelo y barbilla).
-const MARGIN_X = 1.5;
-const MARGIN_Y = 1.7;
+// Confianza mínima de una persona y de cada punto del cuerpo (MoveNet).
+const PERSON_THRESHOLD = 0.2;
+const KEYPOINT_THRESHOLD = 0.25;
+// Margen final de seguridad alrededor de cada cabeza.
+const MARGIN = 1.15;
 
 // ---------------------------------------------------------------------------
 // Detector
@@ -40,7 +43,19 @@ function loadDetector() {
       await tf.ready();
       const modelDir = path.join(path.dirname(require.resolve('@vladmandic/face-api/package.json')), 'model');
       await faceapi.nets.tinyFaceDetector.loadFromDisk(modelDir);
-      return { tf, faceapi };
+      // MoveNet MultiPose (Google, Apache 2.0): postura de hasta 6 personas.
+      // Permite localizar la cabeza aunque no se vea la cara (perfil, espaldas).
+      const poseDir = path.join(__dirname, '..', 'models');
+      const json = JSON.parse(fs.readFileSync(path.join(poseDir, 'movenet-multipose.json'), 'utf8'));
+      const bin = fs.readFileSync(path.join(poseDir, 'movenet-multipose.bin'));
+      const pose = await tf.loadGraphModel(
+        tf.io.fromMemory({
+          modelTopology: json.modelTopology,
+          weightSpecs: json.weightsManifest[0].weights,
+          weightData: bin.buffer.slice(bin.byteOffset, bin.byteOffset + bin.length),
+        }),
+      );
+      return { tf, faceapi, pose };
     })();
     detectorPromise.catch(() => {
       detectorPromise = null;
@@ -61,15 +76,85 @@ function iou(a, b) {
   return { iou: inter / (areaA + areaB - inter), cover: inter / Math.min(areaA, areaB) };
 }
 
-/** Elimina detecciones duplicadas (p. ej. la misma cara vista en dos mosaicos). */
+/**
+ * Une las cajas que corresponden a la misma cabeza (vista por los dos
+ * detectores o en dos mosaicos). Se queda con la unión: es más seguro censurar
+ * de más que dejar parte de la cabeza visible.
+ */
 function mergeBoxes(boxes) {
   const sorted = [...boxes].sort((a, b) => b.score - a.score);
   const kept = [];
   for (const b of sorted) {
-    if (kept.some((k) => { const o = iou(k, b); return o.iou > 0.35 || o.cover > 0.6; })) continue;
-    kept.push(b);
+    const same = kept.find((k) => { const o = iou(k, b); return o.iou > 0.25 || o.cover > 0.5; });
+    if (!same) {
+      kept.push({ ...b });
+      continue;
+    }
+    const x1 = Math.max(same.x + same.w, b.x + b.w);
+    const y1 = Math.max(same.y + same.h, b.y + b.h);
+    same.x = Math.min(same.x, b.x);
+    same.y = Math.min(same.y, b.y);
+    same.w = x1 - same.x;
+    same.h = y1 - same.y;
+    same.score = Math.max(same.score, b.score);
   }
   return kept;
+}
+
+/**
+ * Caja de la cabeza completa (pelo, orejas, barbilla) a partir de la caja de la
+ * cara que da el detector, que solo cubre de las cejas a la barbilla.
+ * Coordenadas en píxeles.
+ */
+function headFromFace(x, y, w, h) {
+  const cx = x + w / 2;
+  const cy = y + h * 0.35; // la cabeza se extiende sobre todo hacia arriba
+  const hw = w * 1.7;
+  const hh = h * 1.9;
+  return { x: cx - hw / 2, y: cy - hh / 2, w: hw, h: hh };
+}
+
+/**
+ * Cabezas a partir de la postura (MoveNet). Usa nariz, ojos y orejas si se ven;
+ * si la persona está de espaldas o tapada, la sitúa encima de los hombros.
+ * `p` son las 56 salidas de una persona; `side` el lado del cuadrado de entrada.
+ * Devuelve cajas en píxeles del fotograma.
+ */
+function headFromPose(p, side) {
+  if (p[55] < PERSON_THRESHOLD) return null;
+  const kp = (i) => ({ x: p[3 * i + 1] * side, y: p[3 * i] * side, ok: p[3 * i + 2] >= KEYPOINT_THRESHOLD });
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  const face = [0, 1, 2, 3, 4].map(kp).filter((k) => k.ok);
+  const [lEar, rEar, lEye, rEye] = [kp(3), kp(4), kp(1), kp(2)];
+  const [lSh, rSh] = [kp(5), kp(6)];
+  const shoulderW = lSh.ok && rSh.ok ? dist(lSh, rSh) : 0;
+  const box = { x: p[52] * side, y: p[51] * side, w: (p[54] - p[52]) * side, h: (p[53] - p[51]) * side };
+
+  let cx;
+  let cy;
+  let size;
+  if (face.length) {
+    cx = face.reduce((s, k) => s + k.x, 0) / face.length;
+    cy = face.reduce((s, k) => s + k.y, 0) / face.length;
+    const sizes = [
+      lEar.ok && rEar.ok ? dist(lEar, rEar) * 1.8 : 0,
+      lEye.ok && rEye.ok ? dist(lEye, rEye) * 3.6 : 0,
+      shoulderW * 0.75,
+    ];
+    size = Math.max(...sizes);
+    // Un solo punto visible y sin hombros: estimamos por el tamaño de la persona.
+    if (!size) size = Math.min(box.w * 0.5, box.h * 0.3);
+    cy -= size * 0.15; // los ojos están por debajo del centro de la cabeza
+  } else if (shoulderW) {
+    // De espaldas o con la cara tapada: la cabeza está encima de los hombros.
+    cx = (lSh.x + rSh.x) / 2;
+    cy = (lSh.y + rSh.y) / 2 - shoulderW * 0.7;
+    size = shoulderW * 0.8;
+  } else {
+    return null;
+  }
+  if (!(size > 4)) return null;
+  return { x: cx - size / 2, y: cy - (size * 1.25) / 2, w: size, h: size * 1.25, score: p[55] };
 }
 
 /** Posiciones de los mosaicos solapados (en píxeles) para buscar caras pequeñas. */
@@ -101,19 +186,35 @@ async function detectFrame(detector, frame, cfg) {
   const opts = new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: SCORE_THRESHOLD });
   const image = tf.tensor3d(new Uint8Array(frame.data.buffer, frame.data.byteOffset, W * H * 3), [H, W, 3], 'int32');
   const boxes = [];
+  const push = (b, score) => {
+    boxes.push({ x: b.x / W, y: b.y / H, w: b.w / W, h: b.h / H, score });
+  };
   const collect = (dets, ox, oy) => {
     for (const d of dets) {
-      boxes.push({
-        x: (d.box.x + ox) / W,
-        y: (d.box.y + oy) / H,
-        w: d.box.width / W,
-        h: d.box.height / H,
-        score: d.score,
-      });
+      push(headFromFace(d.box.x + ox, d.box.y + oy, d.box.width, d.box.height), d.score);
     }
   };
   try {
     collect(await faceapi.detectAllFaces(image, opts), 0, 0);
+    // Postura: la imagen se rellena hasta un cuadrado y se reduce a 256x256.
+    const side = Math.max(W, H);
+    const input = tf.tidy(() =>
+      tf.image
+        .resizeBilinear(tf.pad(image, [[0, side - H], [0, side - W], [0, 0]]), [256, 256])
+        .toInt()
+        .expandDims(0),
+    );
+    try {
+      const out = detector.pose.execute(input);
+      const people = (await out.array())[0];
+      out.dispose();
+      for (const p of people) {
+        const head = headFromPose(p, side);
+        if (head) push(head, head.score);
+      }
+    } finally {
+      input.dispose();
+    }
     if (cfg.tiles) {
       for (const t of tileGrid(W, H)) {
         const tile = tf.slice(image, [t.y, t.x, 0], [t.h, t.w, 3]);
@@ -264,7 +365,8 @@ function matchScore(a, b) {
  * con la pista más parecida del instante anterior.
  */
 function buildTracks(samples, interval) {
-  const maxGap = Math.max(0.8, interval * 3);
+  // Una cabeza puede perderse un momento (giro, mano delante): mantenemos la pista.
+  const maxGap = Math.max(1.5, interval * 5);
   const tracks = [];
   for (const sample of samples) {
     const active = tracks.filter((tr) => sample.t - tr.points[tr.points.length - 1].t <= maxGap);
@@ -337,10 +439,9 @@ function boxesAt(tracks, t, pad) {
 /** Rectángulo y elipse a censurar (en píxeles) para una caja normalizada. */
 function censorArea(box, W, H) {
   const cx = (box.x + box.w / 2) * W;
-  // El detector suele situar la caja algo baja: subimos un poco el centro.
-  const cy = (box.y + box.h * 0.42) * H;
-  const rx = (box.w * W * MARGIN_X) / 2;
-  const ry = (box.h * H * MARGIN_Y) / 2;
+  const cy = (box.y + box.h / 2) * H;
+  const rx = (box.w * W * MARGIN) / 2;
+  const ry = (box.h * H * MARGIN) / 2;
   return {
     cx, cy, rx, ry,
     x0: Math.max(0, Math.floor(cx - rx)),
@@ -466,4 +567,5 @@ module.exports = {
   spawnDecoder,
   mergeBoxes,
   tileGrid,
+  headFromPose,
 };

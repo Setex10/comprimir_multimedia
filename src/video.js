@@ -449,7 +449,7 @@ async function compressVideo(inputPath, outputDir, baseName, options = {}, onPro
     });
     tracks = faces.buildTracks(analysis.samples, analysis.interval);
     // Margen de seguridad antes/después de cada aparición detectada.
-    pad = analysis.interval * 1.5 + 0.2;
+    pad = analysis.interval * 2 + 0.4;
     details.faces = tracks.length;
     if (!tracks.length) details.facesNote = 'no se detectaron caras';
   }

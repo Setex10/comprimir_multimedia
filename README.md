@@ -41,15 +41,18 @@ manteniendo la mayor resolución y calidad visual posible para que tu tienda car
   silencio (0,5 s, 1 s o 2 s) y la sensibilidad (cuánto ruido de fondo se considera silencio).
   Se conserva un pequeño margen en cada corte para que no quede brusco. La app muestra la
   duración antes/después y cuántos segundos se quitaron.
-- **Censurar caras**: detecta las caras con un modelo de IA que funciona dentro de la app
-  (sin enviar nada a internet), las sigue mientras se mueven y las **pixela** o **desenfoca**
-  con un óvalo. Entre detecciones la posición se interpola y cada aparición se extiende un
-  instante antes y después para que no se escape ningún fotograma.
-  - *Precisión normal*: caras medianas y grandes (a partir de ~7 % del ancho del video).
-  - *Precisión alta*: analiza además la imagen por zonas y encuentra caras pequeñas o lejanas
-    (≈ 3 % del ancho); tarda bastante más.
-  - Limitaciones: caras de perfil muy marcado, tapadas o muy oscuras pueden no detectarse.
-    **Revisa siempre el video antes de publicarlo.**
+- **Censurar caras**: censura la **cabeza completa** de cada persona y la sigue mientras se
+  mueve, también cuando se gira, se pone de perfil o de espaldas. Combina dos modelos de IA que
+  funcionan dentro de la app (sin enviar nada a internet):
+  - un detector de caras (bueno en primeros planos), y
+  - **MoveNet MultiPose**, que detecta la postura de hasta 6 personas (nariz, ojos, orejas,
+    hombros…) y permite situar la cabeza aunque no se vea la cara.
+  Entre detecciones la posición se interpola y cada aparición se extiende un instante antes y
+  después para que no se escape ningún fotograma. Estilo pixelado o desenfoque (óvalo).
+  - *Precisión normal*: cabezas de personas visibles y caras desde ~7 % del ancho del video.
+  - *Precisión alta*: analiza además la imagen por zonas para caras pequeñas o lejanas; más lenta.
+  - Limitaciones: personas muy pequeñas, muy tapadas o cortadas por el borde pueden no
+    detectarse. **Revisa siempre el video antes de publicarlo.**
   - Se puede combinar con eliminar silencios, cambiar resolución, FPS, etc.
 - Acepta MP4, MOV, M4V, WebM, MKV, AVI…
 
