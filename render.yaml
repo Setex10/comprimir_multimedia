@@ -1,0 +1,20 @@
+# Blueprint de Render: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: compresor-multimedia
+    runtime: docker
+    # Los planes "free" y "starter" tienen 512 MB de RAM: en pruebas, comprimir un
+    # video 1080p se quedó sin memoria con ese límite. "standard" tiene 2 GB.
+    plan: standard
+    branch: main
+    autoDeploy: true
+    healthCheckPath: /api/health
+    envVars:
+      # Contraseña para entrar a la app (usuario: cualquiera). Render la pedirá al crear el servicio.
+      - key: APP_PASSWORD
+        sync: false
+      # "medium" comprime más rápido en servidores con poca CPU; "slow" da algo más de calidad por MB.
+      - key: VIDEO_PRESET
+        value: medium
+      - key: MAX_UPLOAD_MB
+        value: "1024"
