@@ -18,3 +18,10 @@ services:
         value: medium
       - key: MAX_UPLOAD_MB
         value: "1024"
+      # Conexión con Shopify (app del Dev Dashboard instalada en la tienda).
+      - key: SHOPIFY_SHOP
+        sync: false
+      - key: SHOPIFY_CLIENT_ID
+        sync: false
+      - key: SHOPIFY_CLIENT_SECRET
+        sync: false

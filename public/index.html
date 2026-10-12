@@ -8,8 +8,11 @@
 </head>
 <body>
   <header class="top">
-    <h1>Compresor Multimedia</h1>
-    <p class="subtitle">Comprime tus imágenes y videos para Shopify manteniendo la máxima calidad visual.</p>
+    <div>
+      <h1>Compresor Multimedia</h1>
+      <p class="subtitle">Comprime tus imágenes y videos para Shopify manteniendo la máxima calidad visual.</p>
+    </div>
+    <button type="button" id="shopifyBtn" class="shopify-btn">Conectar Shopify</button>
   </header>
 
   <main class="layout">
@@ -47,6 +50,21 @@
             <option value="1200">1200 px</option>
           </select>
           <small class="hint">Nunca se agranda. 4472 px es el límite de Shopify.</small>
+        </label>
+        <label class="field">
+          <span>Proporción</span>
+          <select id="aspect">
+            <option value="" selected>Original (sin recortar)</option>
+            <option value="1:1">1:1 · cuadrada</option>
+            <option value="4:5">4:5 · vertical</option>
+            <option value="3:4">3:4 · vertical</option>
+            <option value="2:3">2:3 · vertical</option>
+            <option value="9:16">9:16 · historias / reels</option>
+            <option value="16:9">16:9 · banner</option>
+            <option value="4:3">4:3 · horizontal</option>
+            <option value="3:2">3:2 · horizontal</option>
+          </select>
+          <small class="hint">Recorta al centro. Con «Recortar» en cada imagen puedes mover el recuadro.</small>
         </label>
       </fieldset>
 
@@ -134,6 +152,7 @@
         </div>
         <div class="summary-actions">
           <button type="button" id="clearBtn" class="ghost">Limpiar lista</button>
+          <button type="button" id="shopifyAllBtn" class="ghost" hidden>Subir todo a Shopify</button>
           <button type="button" id="zipBtn">Descargar todo (.zip)</button>
         </div>
       </div>
@@ -152,11 +171,18 @@
       </div>
       <div class="result">
         <span class="badge"></span>
-        <a class="download" hidden>Descargar</a>
+        <div class="item-actions">
+          <button type="button" class="ghost small crop-btn" hidden>Recortar</button>
+          <button type="button" class="ghost small shopify-up" hidden>Subir a Shopify</button>
+          <a class="download" hidden>Descargar</a>
+        </div>
+        <a class="shopify-link" target="_blank" rel="noopener" hidden>✓ En Shopify</a>
       </div>
     </li>
   </template>
 
+  <script src="cropper.js"></script>
+  <script src="shopify.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

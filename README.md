@@ -64,9 +64,50 @@ manteniendo la mayor resolución y calidad visual posible para que tu tienda car
 | Alta *(por defecto)* | 82         | 23           | La mayoría de imágenes y videos          |
 | Equilibrada  | 75                 | 26           | Banners grandes, videos de fondo         |
 
+### Recortar imágenes (1:1, 4:5, 9:16…)
+
+- **Proporción** en los ajustes de Imágenes: recorta todas las imágenes al centro con la
+  proporción elegida (1:1, 4:5, 3:4, 2:3, 9:16, 16:9, 4:3, 3:2).
+- Botón **Recortar** en cada imagen: abre un editor como el de Shopify para elegir la
+  proporción (o recorte libre), **mover el recuadro** y redimensionarlo desde las esquinas
+  (también con el dedo en el móvil y con las flechas del teclado). «Girar proporción» cambia
+  entre vertical y horizontal (4:5 ↔ 5:4). Avisa si el recorte queda por debajo de 800 px.
+- El recorte respeta la orientación de las fotos del móvil y se aplica antes de comprimir.
+
+### Subir directamente a Shopify
+
+Botón **Conectar Shopify** (arriba a la derecha). Una vez conectada la tienda, cada archivo
+listo tiene **Subir a Shopify** (y «Subir todo a Shopify» para varios), con dos destinos:
+
+- **Contenido → Archivos**: para usar en el tema, secciones, banners, etc.
+- **Un producto**: lo buscas por nombre y la imagen o el video se añade a sus fotos.
+
+Puedes escribir el texto alternativo (SEO y accesibilidad); por defecto se genera a partir del
+nombre del archivo.
+
+**Cómo conectar tu tienda** (desde 2026 Shopify ya no deja crear apps personalizadas en el
+admin; se crean en el *Dev Dashboard*):
+
+1. Entra al [Dev Dashboard de Shopify](https://shopify.dev/docs/apps/build/dev-dashboard/create-apps-using-dev-dashboard)
+   y crea una app.
+2. En **Versions**, crea una versión con los permisos (scopes)
+   `write_files, read_files, write_products, read_products` y pulsa **Release**.
+3. Pulsa **Install app** e instálala en tu tienda (la tienda y la app deben estar en la misma
+   organización).
+4. En **Settings** de la app copia el **Client ID** y el **Client secret** y pégalos en la
+   ventana *Conectar Shopify* junto con el dominio `tutienda.myshopify.com`.
+
+La app pide sola un token de acceso que dura 24 h y lo renueva cuando caduca. Los datos se
+guardan solo en tu equipo, en `.shopify.json` (excluido de git), y el secreto nunca se envía
+al navegador. Si tienes una app antigua creada en el admin con un token `shpat_…`, también
+puedes usarlo (opción «¿Tienes una app antigua…?»).
+
+En un servidor (por ejemplo Render) es mejor usar variables de entorno: `SHOPIFY_SHOP`,
+`SHOPIFY_CLIENT_ID` y `SHOPIFY_CLIENT_SECRET` (o `SHOPIFY_ACCESS_TOKEN`).
+
 ## Requisitos
 
-- [Node.js](https://nodejs.org/) 18 o superior.
+- [Node.js](https://nodejs.org/) 20 o superior.
 - No necesitas instalar FFmpeg: se descarga automáticamente con `npm install` (paquete `ffmpeg-static`).
   Si prefieres usar el FFmpeg de tu sistema, define la variable `FFMPEG_PATH`.
 
@@ -95,6 +136,8 @@ docker run -p 3000:3000 compresor-multimedia
 | `FFMPEG_PATH`   | (incluido)  | Ruta a un binario de FFmpeg alternativo    |
 | `APP_PASSWORD`  | (ninguna)   | Si se define, la app pide esta contraseña (útil al publicarla en internet) |
 | `VIDEO_PRESET`  | `slow`      | Preset de x264; `medium` o `fast` comprimen más rápido en servidores modestos |
+| `SHOPIFY_SHOP`, `SHOPIFY_CLIENT_ID`, `SHOPIFY_CLIENT_SECRET` | (ninguna) | Conexión con Shopify fijada por el servidor |
+| `SHOPIFY_ACCESS_TOKEN` | (ninguna) | Alternativa: token `shpat_…` de una app antigua |
 
 ## Consejos para Shopify
 

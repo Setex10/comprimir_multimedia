@@ -8,6 +8,8 @@
   const summaryText = $('summaryText');
   const zipBtn = $('zipBtn');
   const clearBtn = $('clearBtn');
+  const shopifyAllBtn = $('shopifyAllBtn');
+  let shopifyConnected = false;
 
   /** @type {{el: HTMLElement, job: any|null}[]} */
   let items = [];
@@ -50,6 +52,7 @@
       blurFaces: $('blurFaces').checked,
       faceStyle: $('faceStyle').value,
       facePrecision: $('facePrecision').value,
+      aspect: $('aspect').value,
     };
   }
 
@@ -67,7 +70,12 @@
         thumb.textContent = file.type.startsWith('video/') ? 'VIDEO' : 'ARCHIVO';
       }
       list.prepend(el);
-      const item = { el, job: null };
+      const item = { el, job: null, file, options, busy: true, crop: null };
+      const canCrop = file.type.startsWith('image/') && !/hei[cf]/i.test(file.type + file.name);
+      const cropBtn = el.querySelector('.crop-btn');
+      cropBtn.hidden = !canCrop;
+      cropBtn.addEventListener('click', () => editCrop(item));
+      el.querySelector('.shopify-up').addEventListener('click', () => uploadToShopify([item]));
       items.push(item);
       queue.push({ file, item, options });
     }
@@ -125,7 +133,37 @@
     }
   }
 
+  /** Abre el editor de recorte y vuelve a procesar la imagen con el nuevo encuadre. */
+  async function editCrop(item) {
+    if (item.busy) return;
+    const result = await window.openCropper(item.file, {
+      aspect: item.options.aspect,
+      crop: item.crop,
+    });
+    if (!result) return;
+    item.crop = result.crop;
+    item.options = {
+      ...item.options,
+      aspect: result.aspect || '',
+      crop: result.crop ? JSON.stringify(result.crop) : '',
+    };
+    item.busy = true;
+    queue.push({ file: item.file, item, options: item.options });
+    updateSummary();
+    pump();
+  }
+
+  function resetItem(item) {
+    item.job = null;
+    item.busy = true;
+    item.el.classList.remove('error');
+    item.el.querySelector('.badge').textContent = '';
+    for (const sel of ['.download', '.shopify-up', '.shopify-link']) item.el.querySelector(sel).hidden = true;
+    item.el.querySelector('.crop-btn').disabled = true;
+  }
+
   async function processFile({ file, item, options }) {
+    resetItem(item);
     try {
       const sizeText = formatBytes(file.size);
       let job = await upload(file, options, (p) => {
@@ -146,6 +184,8 @@
       item.el.classList.add('error');
       setProgress(item, 100, `Error: ${err.message}`);
     }
+    item.busy = false;
+    item.el.querySelector('.crop-btn').disabled = false;
     updateSummary();
   }
 
@@ -158,6 +198,7 @@
       parts.push(resized ? `${d.originalWidth}×${d.originalHeight} → ${d.width}×${d.height}` : `${d.width}×${d.height}`);
     }
     if (d.format) parts.push(d.format.toUpperCase());
+    if (d.cropped) parts.push(item.options.aspect ? `recortada ${item.options.aspect}` : 'recortada');
     if (d.removedSeconds) {
       parts.push(`${formatSeconds(d.originalDuration)} → ${formatSeconds(d.duration)} (−${formatSeconds(d.removedSeconds)} de silencios)`);
     } else if (d.silenceNote) {
@@ -174,6 +215,39 @@
     link.href = `/api/jobs/${job.id}/download`;
     link.setAttribute('download', job.outputName);
     link.hidden = false;
+    item.el.querySelector('.shopify-up').hidden = !shopifyConnected;
+    // Miniatura del resultado (muestra el recorte aplicado).
+    if (job.kind === 'image') {
+      item.el.querySelector('.thumb').style.backgroundImage = `url("/api/jobs/${job.id}/download")`;
+    }
+  }
+
+  /** "camiseta-azul-frente.jpg" → "Camiseta azul frente" */
+  function altFromName(name) {
+    const text = name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim();
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  }
+
+  async function uploadToShopify(selected) {
+    const ready = selected.filter((i) => i.job);
+    if (!ready.length) return;
+    const results = await window.ShopifyUI.openUpload(
+      ready.map((i) => ({ id: i.job.id, name: i.job.outputName, alt: altFromName(i.job.outputName) })),
+    );
+    for (const item of ready) {
+      const result = results.get(item.job.id);
+      if (!result || result instanceof Error) continue;
+      const a = item.el.querySelector('.shopify-link');
+      a.href = result.adminUrl;
+      a.title = result.destination;
+      a.hidden = false;
+    }
+  }
+
+  function setShopifyConnected(connected) {
+    shopifyConnected = connected;
+    for (const item of items) item.el.querySelector('.shopify-up').hidden = !(connected && item.job);
+    updateSummary();
   }
 
   function updateSummary() {
@@ -188,7 +262,11 @@
     if (pending > 0) text += ` · procesando ${pending}…`;
     summaryText.textContent = text;
     zipBtn.disabled = done.length === 0;
+    shopifyAllBtn.hidden = !shopifyConnected || done.length < 2;
   }
+
+  shopifyAllBtn.addEventListener('click', () => uploadToShopify(items.filter((i) => i.job)));
+  window.ShopifyUI.init(setShopifyConnected);
 
   const toggles = [['removeSilence', 'silenceOptions'], ['blurFaces', 'faceOptions']];
   for (const [check, panel] of toggles) {

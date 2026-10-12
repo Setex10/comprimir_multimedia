@@ -7,8 +7,9 @@ const path = require('path');
 const crypto = require('crypto');
 const { ZipArchive } = require('archiver');
 
-const { compressImage, fileSize } = require('./image');
+const { compressImage, fileSize, parseAspect } = require('./image');
 const { compressVideo, getFfmpeg, FFMPEG_HELP } = require('./video');
+const shopify = require('./shopify');
 
 const PORT = Number(process.env.PORT) || 3000;
 const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB) || 2048;
@@ -87,6 +88,22 @@ function publicJob(job) {
   };
 }
 
+/** Recorte elegido en el editor: JSON {x, y, w, h} en fracciones 0-1. */
+function parseCrop(value) {
+  if (!value) return null;
+  let crop;
+  try {
+    crop = typeof value === 'string' ? JSON.parse(value) : value;
+  } catch {
+    return null;
+  }
+  const nums = ['x', 'y', 'w', 'h'].map((k) => Number(crop?.[k]));
+  if (nums.some((n) => !Number.isFinite(n))) return null;
+  const [x, y, w, h] = nums;
+  if (x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > 1.0001 || y + h > 1.0001) return null;
+  return { x, y, w: Math.min(w, 1 - x), h: Math.min(h, 1 - y) };
+}
+
 function parseOptions(body) {
   return {
     quality: ['maxima', 'alta', 'equilibrada'].includes(body.quality) ? body.quality : 'alta',
@@ -103,6 +120,8 @@ function parseOptions(body) {
     blurFaces: body.blurFaces === 'true' || body.blurFaces === true,
     faceStyle: body.faceStyle === 'desenfoque' ? 'desenfoque' : 'pixelado',
     facePrecision: body.facePrecision === 'alta' ? 'alta' : 'normal',
+    aspect: parseAspect(body.aspect) ? String(body.aspect) : null,
+    crop: parseCrop(body.crop),
   };
 }
 
@@ -125,6 +144,7 @@ async function runJob(job, options) {
           height: result.height,
           originalWidth: result.originalWidth,
           originalHeight: result.originalHeight,
+          cropped: result.cropped,
         };
       } else {
         result = await compressVideo(job.inputPath, OUTPUT_DIR, baseName, options, (p, phase) => {
@@ -143,7 +163,7 @@ async function runJob(job, options) {
       // el mismo y devolver el original anularía la censura.)
       const inExt = path.extname(job.originalName).toLowerCase().replace('jpeg', 'jpg');
       const outExt = path.extname(result.outputPath).toLowerCase();
-      const edited = job.details?.removedSeconds || job.details?.faces;
+      const edited = job.details?.removedSeconds || job.details?.faces || job.details?.cropped;
       if (job.outputSize >= job.originalSize && inExt === outExt && !edited) {
         await fsp.rm(result.outputPath, { force: true });
         job.outputPath = path.join(OUTPUT_DIR, `${baseName}${outExt}`);
@@ -264,6 +284,133 @@ app.get('/api/zip', (req, res) => {
     archive.file(job.outputPath, { name });
   }
   archive.finalize();
+});
+
+// ---------------------------------------------------------------------------
+// Shopify
+// ---------------------------------------------------------------------------
+const MIME = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.gif': 'image/gif',
+  '.mp4': 'video/mp4',
+};
+
+/** Texto alternativo a partir del nombre: "camiseta-azul-frente.jpg" → "Camiseta azul frente". */
+function altFromName(name) {
+  const text = path.parse(name).name.replace(/[-_]+/g, ' ').trim();
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function shopifyError(res, err) {
+  const known = err instanceof shopify.ShopifyError;
+  if (!known) console.error('[shopify]', err);
+  res.status(known ? 400 : 500).json({ error: known ? err.message : `Error inesperado: ${err.message}` });
+}
+
+function requireShopify(res) {
+  const config = shopify.readConfig();
+  if (!config) {
+    res.status(400).json({ error: 'Conecta primero tu tienda de Shopify.' });
+    return null;
+  }
+  return config;
+}
+
+const jsonBody = express.json({ limit: '100kb' });
+
+app.get('/api/shopify/status', async (req, res) => {
+  const config = shopify.readConfig();
+  if (!config) return res.json({ connected: false, scopes: shopify.SCOPES });
+  const info = {
+    connected: true,
+    shop: config.shop,
+    mode: config.accessToken ? 'token' : 'client',
+    fromEnv: Boolean(config.fromEnv),
+    scopes: shopify.SCOPES,
+  };
+  try {
+    info.name = (await shopify.testConnection(config)).name;
+  } catch (err) {
+    info.error = err.message;
+  }
+  res.json(info);
+});
+
+app.post('/api/shopify/config', jsonBody, async (req, res) => {
+  if (shopify.readConfig()?.fromEnv) {
+    return res.status(400).json({ error: 'La conexión está fijada con variables de entorno (SHOPIFY_*).' });
+  }
+  try {
+    const body = req.body || {};
+    const config = {
+      shop: shopify.normalizeShop(body.shop),
+      clientId: String(body.clientId || '').trim(),
+      clientSecret: String(body.clientSecret || '').trim(),
+      accessToken: String(body.accessToken || '').trim(),
+    };
+    if (!config.accessToken && !(config.clientId && config.clientSecret)) {
+      throw new shopify.ShopifyError('Escribe el Client ID y el Client secret de tu app de Shopify.');
+    }
+    // Solo se guarda si la conexión funciona.
+    const info = await shopify.testConnection(config);
+    await shopify.saveConfig(config);
+    res.json({ connected: true, shop: config.shop, name: info.name });
+  } catch (err) {
+    shopifyError(res, err);
+  }
+});
+
+app.delete('/api/shopify/config', async (req, res) => {
+  if (shopify.readConfig()?.fromEnv) {
+    return res.status(400).json({ error: 'La conexión está fijada con variables de entorno (SHOPIFY_*).' });
+  }
+  await shopify.deleteConfig();
+  res.json({ connected: false });
+});
+
+app.get('/api/shopify/products', async (req, res) => {
+  const config = requireShopify(res);
+  if (!config) return;
+  try {
+    res.json({ products: await shopify.searchProducts(config, req.query.q) });
+  } catch (err) {
+    shopifyError(res, err);
+  }
+});
+
+app.post('/api/jobs/:id/shopify', jsonBody, async (req, res) => {
+  const config = requireShopify(res);
+  if (!config) return;
+  const job = jobs.get(req.params.id);
+  if (!job || job.status !== 'done') return res.status(404).json({ error: 'Archivo no disponible (puede haber expirado).' });
+
+  const mimeType = MIME[path.extname(job.outputPath).toLowerCase()];
+  if (!mimeType) return res.status(400).json({ error: 'Shopify no admite este formato de archivo.' });
+  const productId = req.body?.productId ? String(req.body.productId) : null;
+  if (productId && !/^gid:\/\/shopify\/Product\/\d+$/.test(productId)) {
+    return res.status(400).json({ error: 'Producto no válido.' });
+  }
+  try {
+    const result = await shopify.uploadFile(
+      config,
+      {
+        path: job.outputPath,
+        filename: job.outputName,
+        mimeType,
+        kind: job.kind === 'video' ? 'VIDEO' : 'IMAGE',
+        alt: String(req.body?.alt ?? altFromName(job.outputName)).slice(0, 512),
+      },
+      { productId },
+    );
+    job.shopify = result;
+    res.json(result);
+  } catch (err) {
+    shopifyError(res, err);
+  }
 });
 
 app.use((err, req, res, _next) => {

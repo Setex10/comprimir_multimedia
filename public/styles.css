@@ -39,6 +39,11 @@ body {
   max-width: 1200px;
   margin: 0 auto;
   padding: 32px 16px 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+  align-items: center;
 }
 .top h1 { margin: 0; font-size: 1.75rem; }
 .subtitle { margin: 4px 0 0; color: var(--muted); }
@@ -177,3 +182,173 @@ button.ghost { background: transparent; color: var(--text); border: 1px solid va
 .hint { display: block; margin-top: 4px; font-size: 0.78rem; color: var(--muted); }
 .sub-options { margin: 4px 0 0 24px; }
 .sub-options[hidden] { display: none; }
+
+/* ---------- Botones auxiliares ---------- */
+button.small, .item-actions .download { padding: 6px 10px; font-size: 0.85rem; }
+button.danger { color: var(--error); border-color: var(--error); }
+.item-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.shopify-link { font-size: 0.8rem; color: var(--accent); font-weight: 600; text-decoration: none; }
+.shopify-link:hover { text-decoration: underline; }
+.error-text { color: var(--error); }
+.spacer { flex: 1; }
+
+.shopify-btn {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.shopify-btn::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.shopify-btn.connected::before { background: var(--accent); }
+.shopify-btn.warn::before { background: var(--error); }
+.shopify-btn:hover { background: var(--accent-soft); }
+
+/* ---------- Ventanas modales ---------- */
+dialog.modal {
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  padding: 20px;
+  overflow: auto;
+}
+dialog.modal::backdrop { background: rgba(0, 0, 0, 0.55); }
+dialog.modal h2 { margin: 0 0 12px; font-size: 1.15rem; }
+.modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 16px;
+}
+.steps { padding-left: 20px; margin: 0 0 12px; font-size: 0.9rem; }
+.steps li { margin-bottom: 6px; }
+.steps code { font-size: 0.8rem; background: var(--bg); padding: 1px 4px; border-radius: 4px; }
+.steps a { color: var(--accent); }
+input[type="text"], input[type="search"], input[type="password"], input:not([type]) {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+}
+details { margin-top: 10px; font-size: 0.9rem; }
+summary { cursor: pointer; color: var(--muted); }
+
+/* ---------- Subida a Shopify ---------- */
+.dest { display: grid; gap: 4px; margin: 0 0 12px; }
+.product-picker { margin: 6px 0 0 24px; display: grid; gap: 6px; }
+.product-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.product-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+.product-list li:last-child { border-bottom: none; }
+.product-list li:hover, .product-list li:focus { background: var(--accent-soft); outline: none; }
+.product-list li.selected { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.product-list li.hint, .product-list li.error-text { cursor: default; }
+.product-thumb {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  background: var(--bg) center / cover no-repeat;
+  flex: none;
+}
+.product-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.product-status { font-size: 0.75rem; color: var(--muted); }
+.upload-status { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 4px; font-size: 0.9rem; }
+.upload-status a { color: var(--accent); margin-left: 6px; }
+.upload-status .ok { color: var(--text); }
+
+/* ---------- Editor de recorte ---------- */
+dialog.crop-modal { width: min(920px, calc(100vw - 32px)); }
+.crop-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+.crop-ratios { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 0.85rem;
+}
+.chip:hover { background: var(--accent-soft); }
+.chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.crop-stage {
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto;
+  padding: 12px;
+  user-select: none;
+  touch-action: none;
+}
+.crop-frame { position: relative; line-height: 0; }
+.crop-image { display: block; max-width: 100%; max-height: min(62vh, 640px); }
+.crop-shade { position: absolute; background: rgba(0, 0, 0, 0.55); pointer-events: none; }
+.crop-box {
+  position: absolute;
+  outline: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+  cursor: move;
+  touch-action: none;
+}
+.crop-box:focus-visible { outline: 3px solid var(--accent); }
+.crop-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(to right, transparent calc(33.33% - 0.5px), rgba(255, 255, 255, 0.5) calc(33.33% - 0.5px), rgba(255, 255, 255, 0.5) calc(33.33% + 0.5px), transparent calc(33.33% + 0.5px), transparent calc(66.66% - 0.5px), rgba(255, 255, 255, 0.5) calc(66.66% - 0.5px), rgba(255, 255, 255, 0.5) calc(66.66% + 0.5px), transparent calc(66.66% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(33.33% - 0.5px), rgba(255, 255, 255, 0.5) calc(33.33% - 0.5px), rgba(255, 255, 255, 0.5) calc(33.33% + 0.5px), transparent calc(33.33% + 0.5px), transparent calc(66.66% - 0.5px), rgba(255, 255, 255, 0.5) calc(66.66% - 0.5px), rgba(255, 255, 255, 0.5) calc(66.66% + 0.5px), transparent calc(66.66% + 0.5px));
+}
+.crop-handle {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+/* Zona táctil más grande que el punto visible. */
+.crop-handle::after { content: ""; position: absolute; inset: -12px; }
+.h-nw { left: 0; top: 0; cursor: nwse-resize; }
+.h-n { left: 50%; top: 0; cursor: ns-resize; }
+.h-ne { left: 100%; top: 0; cursor: nesw-resize; }
+.h-e { left: 100%; top: 50%; cursor: ew-resize; }
+.h-se { left: 100%; top: 100%; cursor: nwse-resize; }
+.h-s { left: 50%; top: 100%; cursor: ns-resize; }
+.h-sw { left: 0; top: 100%; cursor: nesw-resize; }
+.h-w { left: 0; top: 50%; cursor: ew-resize; }
+/* Con proporción fija solo se redimensiona desde las esquinas. */
+.crop-box.locked .h-n, .crop-box.locked .h-e, .crop-box.locked .h-s, .crop-box.locked .h-w { display: none; }
+.crop-info { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.crop-info.warn { color: var(--error); }
+@media (max-width: 520px) {
+  .modal-actions .spacer { display: none; }
+  .crop-info { width: 100%; }
+}

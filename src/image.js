@@ -22,11 +22,56 @@ function pickFormat(requested, metadata) {
   return 'jpeg';
 }
 
+/** "4:5" → 0.8 (ancho / alto). Devuelve null si no es una proporción válida. */
+function parseAspect(aspect) {
+  const m = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(String(aspect || ''));
+  if (!m) return null;
+  const ratio = Number(m[1]) / Number(m[2]);
+  return ratio > 0 && Number.isFinite(ratio) ? ratio : null;
+}
+
+/**
+ * Calcula el recorte en píxeles sobre la imagen ya orientada.
+ * - `crop` ({x, y, w, h} en fracciones 0-1) lo elige el usuario en el editor.
+ * - Si solo hay `aspect` ("1:1", "9:16"…), se recorta centrado lo más grande posible.
+ * Devuelve null si no hay que recortar.
+ */
+function cropRect(width, height, { crop, aspect } = {}) {
+  let x;
+  let y;
+  let w;
+  let h;
+  if (crop) {
+    x = crop.x * width;
+    y = crop.y * height;
+    w = crop.w * width;
+    h = crop.h * height;
+  } else {
+    const ratio = parseAspect(aspect);
+    if (!ratio) return null;
+    w = Math.min(width, height * ratio);
+    h = w / ratio;
+    x = (width - w) / 2;
+    y = (height - h) / 2;
+  }
+  const left = Math.max(0, Math.min(width - 1, Math.round(x)));
+  const top = Math.max(0, Math.min(height - 1, Math.round(y)));
+  const rect = {
+    left,
+    top,
+    width: Math.max(1, Math.min(width - left, Math.round(w))),
+    height: Math.max(1, Math.min(height - top, Math.round(h))),
+  };
+  if (rect.left === 0 && rect.top === 0 && rect.width === width && rect.height === height) return null;
+  return rect;
+}
+
 /**
  * Comprime una imagen.
  * @param {string} inputPath
  * @param {string} outputDir
- * @param {object} options { quality: 'maxima'|'alta'|'equilibrada', format: 'auto'|'jpeg'|'webp'|'png'|'avif', maxDimension: number|0 }
+ * @param {object} options { quality: 'maxima'|'alta'|'equilibrada', format: 'auto'|'jpeg'|'webp'|'png'|'avif',
+ *   maxDimension: number|0, aspect: '1:1'|'9:16'|…, crop: {x, y, w, h} (fracciones 0-1) }
  * @returns {Promise<{outputPath, format, width, height, originalWidth, originalHeight}>}
  */
 async function compressImage(inputPath, outputDir, baseName, options = {}) {
@@ -51,10 +96,15 @@ async function compressImage(inputPath, outputDir, baseName, options = {}) {
   }
   const format = pickFormat(options.format, metadata);
 
-  // .rotate() aplica la orientación EXIF antes de eliminar los metadatos,
-  // así las fotos del móvil no quedan giradas.
-  let pipeline = sharp(inputPath, { limitInputPixels: false, animated: false })
-    .rotate()
+  // autoOrient aplica la orientación EXIF al leer: las fotos del móvil no quedan
+  // giradas y el recorte se hace sobre la imagen tal como se ve en pantalla.
+  const orientedWidth = metadata.autoOrient?.width ?? metadata.width;
+  const orientedHeight = metadata.autoOrient?.height ?? metadata.height;
+  const rect = cropRect(orientedWidth, orientedHeight, options);
+
+  let pipeline = sharp(inputPath, { limitInputPixels: false, animated: false, autoOrient: true });
+  if (rect) pipeline = pipeline.extract(rect);
+  pipeline = pipeline
     .resize({
       width: maxDimension,
       height: maxDimension,
@@ -105,6 +155,7 @@ async function compressImage(inputPath, outputDir, baseName, options = {}) {
     format,
     width: info.width,
     height: info.height,
+    cropped: Boolean(rect),
     originalWidth: metadata.autoOrient?.width ?? metadata.width,
     originalHeight: metadata.autoOrient?.height ?? metadata.height,
   };
@@ -114,4 +165,4 @@ async function fileSize(p) {
   return (await fs.stat(p)).size;
 }
 
-module.exports = { compressImage, fileSize, SHOPIFY_MAX_DIMENSION, QUALITY };
+module.exports = { compressImage, cropRect, parseAspect, fileSize, SHOPIFY_MAX_DIMENSION, QUALITY };
